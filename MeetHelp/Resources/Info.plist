@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>MeetHelp</string>
+    <key>CFBundleDisplayName</key>
+    <string>Meet Help</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.bhanuprakash.MeetHelp</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>MeetHelp</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>MeetHelp needs microphone access to capture audio for transcription.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>MeetHelp needs screen recording permission to capture system audio from your meetings.</string>
+</dict>
+</plist>
