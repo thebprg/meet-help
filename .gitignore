@@ -10,6 +10,7 @@
 ._*
 
 # Xcode
+.xcodebuild/
 *.xcuserdata
 *.xcworkspace
 !*.xcworkspace/contents.xcworkspacedata
@@ -19,6 +20,8 @@ DerivedData/
 *.ipa
 *.dSYM.zip
 *.dSYM
+MeetHelp.app/
+MeetHelp.zip
 *.moved-aside
 *.pbxuser
 !default.pbxuser

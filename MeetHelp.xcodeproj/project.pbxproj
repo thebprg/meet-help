@@ -18,7 +18,8 @@
 		009 /* TranscriptState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109; };
 		010 /* AudioCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110; };
 		011 /* DeepgramService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111; };
-		012 /* CerebrasService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112; };
+		012 /* LLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112; };
+		013 /* KeyboardShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 115; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,9 +35,10 @@
 		109 /* TranscriptState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptState.swift; sourceTree = "<group>"; };
 		110 /* AudioCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCaptureManager.swift; sourceTree = "<group>"; };
 		111 /* DeepgramService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepgramService.swift; sourceTree = "<group>"; };
-		112 /* CerebrasService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CerebrasService.swift; sourceTree = "<group>"; };
+		112 /* LLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMService.swift; sourceTree = "<group>"; };
 		113 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		114 /* MeetHelp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MeetHelp.entitlements; sourceTree = "<group>"; };
+		115 /* KeyboardShortcut.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardShortcut.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -120,6 +122,7 @@
 			children = (
 				108 /* ChatMessage.swift */,
 				109 /* TranscriptState.swift */,
+				115 /* KeyboardShortcut.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -129,7 +132,7 @@
 			children = (
 				110 /* AudioCaptureManager.swift */,
 				111 /* DeepgramService.swift */,
-				112 /* CerebrasService.swift */,
+				112 /* LLMService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -230,7 +233,8 @@
 				009 /* TranscriptState.swift in Sources */,
 				010 /* AudioCaptureManager.swift in Sources */,
 				011 /* DeepgramService.swift in Sources */,
-				012 /* CerebrasService.swift in Sources */,
+				012 /* LLMService.swift in Sources */,
+				013 /* KeyboardShortcut.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

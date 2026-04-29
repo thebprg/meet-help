@@ -5,6 +5,7 @@ struct ChatMessage: Identifiable, Codable {
     let role: Role
     let content: String
     let timestamp: Date
+    let relatedQuestionID: UUID?
     
     enum Role: String, Codable {
         case system
@@ -13,46 +14,44 @@ struct ChatMessage: Identifiable, Codable {
         case interviewer // Transcribed question
     }
     
-    init(id: UUID = UUID(), role: Role, content: String, timestamp: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        content: String,
+        timestamp: Date = Date(),
+        relatedQuestionID: UUID? = nil
+    ) {
         self.id = id
         self.role = role
         self.content = content
         self.timestamp = timestamp
+        self.relatedQuestionID = relatedQuestionID
     }
 }
 
-// MARK: - Cerebras API Request/Response Models
+// MARK: - Chat Completion API Request/Response Models
 
-struct CerebrasRequest: Codable {
+struct ChatCompletionRequest: Codable {
     let model: String
-    let messages: [CerebrasMessage]
+    let messages: [LLMMessage]
     let stream: Bool
     let temperature: Double
-    let max_completion_tokens: Int
+    let max_tokens: Int
     let top_p: Double
     
-    init(messages: [CerebrasMessage], stream: Bool = false) {
-        self.model = Config.cerebrasModel
+    init(messages: [LLMMessage], stream: Bool = false, model: String = Config.selectedOpenRouterModel) {
+        self.model = model
         self.messages = messages
         self.stream = stream
         self.temperature = 0.7
-        self.max_completion_tokens = 4096  // Increased to allow full responses with thinking
+        self.max_tokens = 4096
         self.top_p = 1.0
     }
 }
 
-struct CerebrasMessage: Codable {
+struct LLMMessage: Codable {
     let role: String
     let content: String
-}
-
-struct CerebrasResponse: Codable {
-    let choices: [Choice]
-    
-    struct Choice: Codable {
-        let message: CerebrasMessage
-        let finish_reason: String?
-    }
 }
 
 // MARK: - Deepgram Response Models

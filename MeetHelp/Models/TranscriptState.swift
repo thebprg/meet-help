@@ -39,7 +39,7 @@ class TranscriptState: ObservableObject {
         // Add system message
         messages.append(ChatMessage(role: .system, content: systemPrompt))
     }
-    
+
     // MARK: - Transcript Logging
     
     func startNewTranscriptLog() {
@@ -79,23 +79,46 @@ class TranscriptState: ObservableObject {
         }
     }
     
-    func addInterviewerQuestion(_ question: String) {
+    @discardableResult
+    func addInterviewerQuestion(_ question: String) -> UUID {
         let message = ChatMessage(role: .interviewer, content: question)
         messages.append(message)
         currentTranscript = ""
         
         // Log to file
         appendToLog("INTERVIEWER: \(question)")
+        return message.id
     }
     
-    func addAssistantAnswer(_ answer: String) {
-        // Strip think tags BEFORE storing to save API costs
-        let cleanedAnswer = stripThinkTags(from: answer)
-        let message = ChatMessage(role: .assistant, content: cleanedAnswer)
+    @discardableResult
+    func beginAssistantAnswer(for questionID: UUID) -> UUID {
+        let message = ChatMessage(role: .assistant, content: "", relatedQuestionID: questionID)
         messages.append(message)
-        
-        // Log to file (cleaned version)
-        appendToLog("SUGGESTED ANSWER: \(cleanedAnswer)")
+        return message.id
+    }
+
+    func updateAssistantAnswer(id answerID: UUID, content: String) {
+        // Strip think tags BEFORE storing to save API costs
+        let cleanedAnswer = stripThinkTags(from: content)
+        guard let index = messages.firstIndex(where: { $0.id == answerID }) else { return }
+
+        let existing = messages[index]
+        messages[index] = ChatMessage(
+            id: existing.id,
+            role: existing.role,
+            content: cleanedAnswer,
+            timestamp: existing.timestamp,
+            relatedQuestionID: existing.relatedQuestionID
+        )
+    }
+
+    func finishAssistantAnswer(id answerID: UUID) {
+        guard let message = messages.first(where: { $0.id == answerID }),
+              !message.content.isEmpty else {
+            return
+        }
+
+        appendToLog("SUGGESTED ANSWER: \(message.content)")
     }
     
     /// Remove <think>...</think> tags and their content from LLM output
@@ -153,16 +176,15 @@ class TranscriptState: ObservableObject {
         return transcriptLogURL?.path
     }
     
-    // Convert to Cerebras format
-    func toCerebrasMessages() -> [CerebrasMessage] {
-        var result: [CerebrasMessage] = []
+    func toLLMMessages(upTo questionID: UUID? = nil) -> [LLMMessage] {
+        var result: [LLMMessage] = []
         
         // Add code context if available
         var systemContent = systemPrompt
         if !codeContext.isEmpty {
             systemContent += "\n\nCode Context:\n```\n\(codeContext)\n```"
         }
-        result.append(CerebrasMessage(role: "system", content: systemContent))
+        result.append(LLMMessage(role: "system", content: systemContent))
         
         // Add conversation history
         for message in messages where message.role != .system {
@@ -177,7 +199,11 @@ class TranscriptState: ObservableObject {
             default:
                 continue
             }
-            result.append(CerebrasMessage(role: role, content: message.content))
+            result.append(LLMMessage(role: role, content: message.content))
+
+            if let questionID, message.id == questionID {
+                break
+            }
         }
         
         return result

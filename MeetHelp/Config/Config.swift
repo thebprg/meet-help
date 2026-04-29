@@ -2,29 +2,66 @@ import Foundation
 import AppKit
 
 enum Config {
-    // MARK: - API Keys (loaded from .env file)
-    static let deepgramAPIKey: String = {
-        return loadEnvValue(key: "DEEPGRAM_API_KEY") ?? ""
-    }()
-    static let cerebrasAPIKey: String = {
-        return loadEnvValue(key: "CEREBRAS_API_KEY") ?? ""
-    }()
-    
+    // MARK: - API Keys (stored from Settings)
+    static var deepgramAPIKey: String {
+        apiKey(for: "deepgramAPIKey")
+    }
+
+    static var openRouterAPIKey: String {
+        apiKey(for: "openRouterAPIKey")
+    }
+
+    static var geminiAPIKey: String {
+        apiKey(for: "geminiAPIKey")
+    }
+
+    static func hasStoredAPIKey(_ key: String) -> Bool {
+        !apiKey(for: key).isEmpty
+    }
+
+    private static func apiKey(for key: String) -> String {
+        UserDefaults.standard.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
     // MARK: - Deepgram Configuration
     static let deepgramWebSocketURL = "wss://api.deepgram.com/v1/listen"
-    static let deepgramModel = "nova-2"
+    static let deepgramModel = "nova-3"
     static let utteranceEndMs = 1500
-    
-    // MARK: - Cerebras Configuration
-    static let cerebrasAPIURL = "https://api.cerebras.ai/v1/chat/completions"
-    static let cerebrasModel = "qwen-3-32b"  // Using Qwen 3 32B model
-    
+
+    // MARK: - LLM Configuration
+    static let openRouterAPIURL = "https://openrouter.ai/api/v1/chat/completions"
+    static let openRouterFreeModel = "openai/gpt-oss-120b:free"
+    static let defaultGeminiModel = "gemini-3.1-flash-lite-preview"
+    static var geminiModel: String {
+        let saved = UserDefaults.standard.string(forKey: "geminiModel")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return saved.isEmpty ? defaultGeminiModel : saved
+    }
+    static var geminiStreamURL: String {
+        "https://generativelanguage.googleapis.com/v1beta/models/\(geminiModel):streamGenerateContent"
+    }
+
+    static var selectedLLMProvider: LLMProvider {
+        let rawValue = UserDefaults.standard.string(forKey: "llmProvider") ?? LLMProvider.openRouter.rawValue
+        return LLMProvider(rawValue: rawValue) ?? .openRouter
+    }
+
+    static var selectedOpenRouterModel: String {
+        let selectedIndex = UserDefaults.standard.integer(forKey: "selectedOpenRouterModelIndex")
+        let index = selectedIndex == 0 ? 1 : selectedIndex
+        let key = "openRouterModel\(min(max(index, 1), 3))"
+        let saved = UserDefaults.standard.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !saved.isEmpty else { return openRouterFreeModel }
+        return saved.hasSuffix(":free") ? saved : openRouterFreeModel
+    }
+
     // MARK: - Audio Configuration
     static let audioSampleRate: Double = 16000
     static let audioChannels: Int = 1
-    
+
     // MARK: - UI Configuration
-    // Dynamic sizing based on screen (1/3 width, 2/3 height)
     static var defaultWindowWidth: CGFloat {
         guard let screen = NSScreen.main else { return 500 }
         return screen.frame.width / 3
@@ -35,57 +72,25 @@ enum Config {
     }
     static let minWindowWidth: CGFloat = 300
     static let minWindowHeight: CGFloat = 400
-    
+
     // Background styling
     static let overlayBackgroundColor: NSColor = NSColor(white: 0.2, alpha: 0.85)
     static let headerBackgroundColor: NSColor = NSColor(white: 0.15, alpha: 0.9)
     static let bubbleOpacity: Double = 0.5
-    
-    // MARK: - .env File Loader
-    
-    /// Load a value from the .env file in the project root
-    private static func loadEnvValue(key: String) -> String? {
-        // First check process environment (e.g. set via Xcode scheme)
-        if let value = ProcessInfo.processInfo.environment[key], !value.isEmpty {
-            return value
+}
+
+enum LLMProvider: String, CaseIterable, Identifiable {
+    case openRouter
+    case google
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .openRouter:
+            return "OpenRouter"
+        case .google:
+            return "Google"
         }
-        
-        // Try loading from .env file relative to executable
-        let envPaths = [
-            // When running from .build/debug/
-            URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-                .deletingLastPathComponent()  // debug/
-                .deletingLastPathComponent()  // .build/
-                .deletingLastPathComponent()  // project root
-                .appendingPathComponent(".env"),
-            // Current working directory
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent(".env"),
-            // Bundle resource
-            Bundle.main.bundleURL.appendingPathComponent(".env")
-        ]
-        
-        for envPath in envPaths {
-            if let contents = try? String(contentsOf: envPath, encoding: .utf8) {
-                let lines = contents.components(separatedBy: .newlines)
-                for line in lines {
-                    let trimmed = line.trimmingCharacters(in: .whitespaces)
-                    guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
-                    
-                    let parts = trimmed.split(separator: "=", maxSplits: 1)
-                    if parts.count == 2 {
-                        let envKey = String(parts[0]).trimmingCharacters(in: .whitespaces)
-                        let envValue = String(parts[1]).trimmingCharacters(in: .whitespaces)
-                            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                        if envKey == key {
-                            return envValue
-                        }
-                    }
-                }
-            }
-        }
-        
-        print("[Config] WARNING: Could not find \(key) in .env file or environment. Check your .env file.")
-        return nil
     }
 }

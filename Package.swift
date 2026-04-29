@@ -15,20 +15,7 @@ let package = Package(
             name: "MeetHelp",
             dependencies: [],
             path: "MeetHelp",
-            sources: [
-                "App/MeetHelpApp.swift",
-                "App/AppDelegate.swift",
-                "Config/Config.swift",
-                "Windows/GhostWindow.swift",
-                "Views/ChatOverlayView.swift",
-                "Views/SettingsView.swift",
-                "Views/Components/MessageBubble.swift",
-                "Models/ChatMessage.swift",
-                "Models/TranscriptState.swift",
-                "Services/AudioCaptureManager.swift",
-                "Services/DeepgramService.swift",
-                "Services/CerebrasService.swift"
-            ]
+            exclude: ["Resources"]
         )
     ]
 )

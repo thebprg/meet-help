@@ -17,6 +17,13 @@ class DeepgramService: NSObject, ObservableObject {
     
     func connect(onUtteranceEnd: @escaping (String) -> Void) {
         self.onUtteranceEnd = onUtteranceEnd
+
+        let apiKey = Config.deepgramAPIKey
+        guard !apiKey.isEmpty else {
+            self.error = "Deepgram API key is missing. Add it in Settings."
+            print("[Deepgram] Deepgram API key is missing. Add it in Settings.")
+            return
+        }
         
         // Build WebSocket URL with parameters
         var components = URLComponents(string: Config.deepgramWebSocketURL)!
@@ -37,7 +44,7 @@ class DeepgramService: NSObject, ObservableObject {
         }
         
         var request = URLRequest(url: url)
-        request.addValue("Token \(Config.deepgramAPIKey)", forHTTPHeaderField: "Authorization")
+        request.addValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
         
         urlSession = URLSession(configuration: .default)
         webSocketTask = urlSession?.webSocketTask(with: request)

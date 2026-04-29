@@ -3,10 +3,10 @@ import SwiftUI
 struct ChatOverlayView: View {
     @ObservedObject var transcriptState: TranscriptState
     @ObservedObject var deepgramService: DeepgramService
-    @ObservedObject var cerebrasService: CerebrasService
     
     // Callback for toggling listening state
     var onToggleListening: (() -> Void)?
+    var onClearHistory: (() -> Void)?
     
     var body: some View {
         VStack(spacing: 0) {
@@ -28,21 +28,21 @@ struct ChatOverlayView: View {
             }
             
             // Separator before transcript area
-            if !deepgramService.currentTranscript.isEmpty || cerebrasService.isProcessing {
+            if !deepgramService.currentTranscript.isEmpty || transcriptState.isProcessing {
                 Rectangle()
                     .fill(Color.white.opacity(0.1))
                     .frame(height: 1)
             }
             
             // Current transcript (what's being heard) - in footer area
-            if !deepgramService.currentTranscript.isEmpty || cerebrasService.isProcessing {
+            if !deepgramService.currentTranscript.isEmpty || transcriptState.isProcessing {
                 VStack(spacing: 8) {
                     if !deepgramService.currentTranscript.isEmpty {
                         CurrentTranscriptView(transcript: deepgramService.currentTranscript)
                     }
                     
                     // Processing indicator
-                    if cerebrasService.isProcessing {
+                    if transcriptState.isProcessing {
                         processingView
                     }
                 }
@@ -94,7 +94,7 @@ struct ChatOverlayView: View {
             
             // Clear history
             Button(action: {
-                transcriptState.clearHistory()
+                onClearHistory?()
             }) {
                 Image(systemName: "trash")
                     .font(.system(size: 13))
@@ -114,20 +114,36 @@ struct ChatOverlayView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 10) {
-                    ForEach(visibleMessages) { message in
-                        MessageBubble(
-                            message: processMessage(message),
-                            isLatest: message.id == visibleMessages.last?.id
-                        )
-                        .id(message.id)
+                    ForEach(visibleTurns) { turn in
+                        VStack(alignment: .leading, spacing: 8) {
+                            MessageBubble(
+                                message: processMessage(turn.question),
+                                isLatest: turn.id == visibleTurns.first?.id
+                            )
+
+                            if let answer = turn.answer {
+                                MessageBubble(
+                                    message: processMessage(answer),
+                                    isLatest: turn.id == visibleTurns.first?.id
+                                )
+                            }
+                        }
+                        .id(turn.id)
                     }
                 }
                 .padding(12)
             }
             .onChange(of: transcriptState.messages.count) { _ in
-                if let lastMessage = visibleMessages.last {
+                if let newestTurn = visibleTurns.first {
                     withAnimation(.easeOut(duration: 0.3)) {
-                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        proxy.scrollTo(newestTurn.id, anchor: .top)
+                    }
+                }
+            }
+            .onChange(of: visibleTurns.first?.answer?.content) { _ in
+                if let newestTurn = visibleTurns.first {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(newestTurn.id, anchor: .top)
                     }
                 }
             }
@@ -184,9 +200,17 @@ struct ChatOverlayView: View {
     
     // MARK: - Helpers
     
-    /// Filter to show only interviewer questions and assistant answers
-    private var visibleMessages: [ChatMessage] {
-        transcriptState.messages.filter { $0.role == .interviewer || $0.role == .assistant }
+    private var visibleTurns: [ConversationTurn] {
+        let questions = transcriptState.messages.filter { $0.role == .interviewer }
+        let answers = transcriptState.messages.filter { $0.role == .assistant }
+
+        return questions.reversed().map { question in
+            ConversationTurn(
+                id: question.id,
+                question: question,
+                answer: answers.first { $0.relatedQuestionID == question.id }
+            )
+        }
     }
     
     private var lastAssistantMessage: ChatMessage? {
@@ -196,7 +220,13 @@ struct ChatOverlayView: View {
     /// Process message content to strip <think> tags
     private func processMessage(_ message: ChatMessage) -> ChatMessage {
         let cleanedContent = stripThinkTags(from: message.content)
-        return ChatMessage(role: message.role, content: cleanedContent)
+        return ChatMessage(
+            id: message.id,
+            role: message.role,
+            content: cleanedContent,
+            timestamp: message.timestamp,
+            relatedQuestionID: message.relatedQuestionID
+        )
     }
     
     /// Remove <think>...</think> tags and their content from LLM output
@@ -220,4 +250,8 @@ struct ChatOverlayView: View {
     }
 }
 
-
+private struct ConversationTurn: Identifiable {
+    let id: UUID
+    let question: ChatMessage
+    let answer: ChatMessage?
+}
