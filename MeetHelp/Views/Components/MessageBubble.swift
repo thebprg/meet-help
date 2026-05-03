@@ -41,12 +41,7 @@ struct MessageBubble: View {
 
     private var answerView: some View {
         HStack(alignment: .top, spacing: 0) {
-            Text(markdownContent)
-                .font(.system(size: 15, weight: .regular))
-                .foregroundColor(.white)
-                .lineSpacing(4)
-                .textSelection(.enabled)
-                .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
+            MarkdownRenderView(markdown: message.content)
 
             Spacer(minLength: 0)
         }
@@ -59,22 +54,6 @@ struct MessageBubble: View {
             .fill(Color.black.opacity(Config.bubbleOpacity))
     }
 
-    private var markdownContent: AttributedString {
-        let content = message.content.isEmpty ? " " : message.content
-
-        if let attributed = try? AttributedString(markdown: content) {
-            return attributed
-        }
-
-        if let attributed = try? AttributedString(
-            markdown: content,
-            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            return attributed
-        }
-
-        return AttributedString(content)
-    }
 }
 
 // MARK: - Typing Indicator

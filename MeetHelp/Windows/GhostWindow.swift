@@ -28,7 +28,7 @@ class GhostWindow: NSWindow {
         self.ignoresMouseEvents = false
         
         // Additional window configuration
-        self.isMovableByWindowBackground = false // We'll handle dragging manually
+        self.isMovableByWindowBackground = true
         self.hasShadow = false
         self.titlebarAppearsTransparent = true
         self.titleVisibility = .hidden
@@ -51,13 +51,16 @@ class GhostWindow: NSWindow {
     override var canBecomeMain: Bool {
         return false
     }
+
+    override func mouseDown(with event: NSEvent) {
+        makeKey()
+        super.mouseDown(with: event)
+    }
 }
 
 // MARK: - Drag Handle View
 
 class DragHandleView: NSView {
-    private var initialLocation: NSPoint?
-    
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupView()
@@ -73,28 +76,14 @@ class DragHandleView: NSView {
         layer?.backgroundColor = NSColor.white.withAlphaComponent(0.2).cgColor
         layer?.cornerRadius = 4
     }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
     
     override func mouseDown(with event: NSEvent) {
-        initialLocation = event.locationInWindow
-    }
-    
-    override func mouseDragged(with event: NSEvent) {
-        guard let window = self.window,
-              let initialLocation = initialLocation else { return }
-        
-        let currentLocation = event.locationInWindow
-        let deltaX = currentLocation.x - initialLocation.x
-        let deltaY = currentLocation.y - initialLocation.y
-        
-        var newOrigin = window.frame.origin
-        newOrigin.x += deltaX
-        newOrigin.y += deltaY
-        
-        window.setFrameOrigin(newOrigin)
-    }
-    
-    override func mouseUp(with event: NSEvent) {
-        initialLocation = nil
+        window?.makeKey()
+        window?.performDrag(with: event)
     }
     
     // Draw grip lines
@@ -149,6 +138,10 @@ class CornerResizeHandle: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         alphaValue = 1.0  // Start fully visible, use isHovering for drawing changes
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
     }
     
     override func viewDidMoveToWindow() {
@@ -245,54 +238,38 @@ class CornerResizeHandle: NSView {
         
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         
-        // Use different visuals for top vs bottom corners
+        // Draw a subtle corner arc on every resize handle. Keeping the
+        // bottom handles visually identical to the top handles prevents the
+        // grip from competing with the composer controls.
         switch corner {
-        case .topLeft, .topRight:
-            // Draw rounded corner arc that matches window corner - glows on hover
+        case .topLeft, .topRight, .bottomLeft, .bottomRight:
             let lineWidth: CGFloat = isHovering ? 3.0 : 1.0
             let opacity: CGFloat = isHovering ? 0.9 : 0.15
             let color = NSColor.white.withAlphaComponent(opacity)
             context.setStrokeColor(color.cgColor)
             context.setLineWidth(lineWidth)
             
-            // Match the window's corner radius (12pt from Config)
             let cornerRadius: CGFloat = 12
             
-            if corner == .topLeft {
-                // Draw arc at top-left corner (starts from left edge, curves to top edge)
+            switch corner {
+            case .topLeft:
                 let center = CGPoint(x: cornerRadius, y: bounds.height - cornerRadius)
                 context.addArc(center: center, radius: cornerRadius - lineWidth/2,
                               startAngle: .pi, endAngle: .pi/2, clockwise: true)
-            } else {
-                // Draw arc at top-right corner (starts from top edge, curves to right edge)
+            case .topRight:
                 let center = CGPoint(x: bounds.width - cornerRadius, y: bounds.height - cornerRadius)
                 context.addArc(center: center, radius: cornerRadius - lineWidth/2,
                               startAngle: .pi/2, endAngle: 0, clockwise: true)
+            case .bottomLeft:
+                let center = CGPoint(x: cornerRadius, y: cornerRadius)
+                context.addArc(center: center, radius: cornerRadius - lineWidth/2,
+                              startAngle: .pi, endAngle: .pi * 1.5, clockwise: false)
+            case .bottomRight:
+                let center = CGPoint(x: bounds.width - cornerRadius, y: cornerRadius)
+                context.addArc(center: center, radius: cornerRadius - lineWidth/2,
+                              startAngle: 0, endAngle: .pi * 1.5, clockwise: true)
             }
             context.strokePath()
-            
-        case .bottomLeft, .bottomRight:
-            // Draw dot pattern for bottom corners
-            let color = isHovering ? NSColor.white.withAlphaComponent(0.8) : NSColor.white.withAlphaComponent(0.4)
-            context.setFillColor(color.cgColor)
-            
-            let dotSize: CGFloat = 2
-            let spacing: CGFloat = 3
-            
-            for row in 0..<3 {
-                for col in 0..<(3 - row) {
-                    var x: CGFloat
-                    let y: CGFloat = 3 + CGFloat(row) * spacing
-                    
-                    if corner == .bottomRight {
-                        x = bounds.width - 3 - CGFloat(col) * spacing
-                    } else {
-                        x = 3 + CGFloat(col) * spacing
-                    }
-                    
-                    context.fillEllipse(in: CGRect(x: x - dotSize/2, y: y - dotSize/2, width: dotSize, height: dotSize))
-                }
-            }
         }
     }
 }
@@ -312,7 +289,7 @@ class GhostWindowController: NSWindowController {
         ))
         
         // Create the hosting view for SwiftUI content
-        let hostingView = NSHostingView(rootView: AnyView(rootView))
+        let hostingView = FirstMouseHostingView(rootView: AnyView(rootView))
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         
         // Create all 4 corner resize handles
@@ -332,8 +309,7 @@ class GhostWindowController: NSWindowController {
             wrapperView.addSubview($0, positioned: .above, relativeTo: hostingView)
         }
         
-        let handleSize: CGFloat = 14
-        let handlePadding: CGFloat = 4
+        let handleSize: CGFloat = 20
         
         // Layout constraints
         NSLayoutConstraint.activate([
@@ -343,15 +319,15 @@ class GhostWindowController: NSWindowController {
             hostingView.trailingAnchor.constraint(equalTo: wrapperView.trailingAnchor),
             hostingView.bottomAnchor.constraint(equalTo: wrapperView.bottomAnchor),
             
-            // Bottom-right resize handle (small dots)
-            bottomRight.trailingAnchor.constraint(equalTo: wrapperView.trailingAnchor, constant: -handlePadding),
-            bottomRight.bottomAnchor.constraint(equalTo: wrapperView.bottomAnchor, constant: -handlePadding),
+            // Bottom-right resize handle
+            bottomRight.trailingAnchor.constraint(equalTo: wrapperView.trailingAnchor),
+            bottomRight.bottomAnchor.constraint(equalTo: wrapperView.bottomAnchor),
             bottomRight.widthAnchor.constraint(equalToConstant: handleSize),
             bottomRight.heightAnchor.constraint(equalToConstant: handleSize),
             
-            // Bottom-left resize handle (small dots)
-            bottomLeft.leadingAnchor.constraint(equalTo: wrapperView.leadingAnchor, constant: handlePadding),
-            bottomLeft.bottomAnchor.constraint(equalTo: wrapperView.bottomAnchor, constant: -handlePadding),
+            // Bottom-left resize handle
+            bottomLeft.leadingAnchor.constraint(equalTo: wrapperView.leadingAnchor),
+            bottomLeft.bottomAnchor.constraint(equalTo: wrapperView.bottomAnchor),
             bottomLeft.widthAnchor.constraint(equalToConstant: handleSize),
             bottomLeft.heightAnchor.constraint(equalToConstant: handleSize),
             
@@ -399,8 +375,6 @@ class GhostWindowController: NSWindowController {
 // MARK: - Ghost Content View (Draggable)
 
 class GhostContentView: NSView {
-    private var initialLocation: NSPoint?
-    
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupAppearance()
@@ -418,6 +392,10 @@ class GhostContentView: NSView {
         layer?.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor
         layer?.borderWidth = 1
     }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
     
     override var isFlipped: Bool {
         return true
@@ -425,25 +403,19 @@ class GhostContentView: NSView {
     
     // Enable window dragging by background
     override func mouseDown(with event: NSEvent) {
-        initialLocation = event.locationInWindow
+        window?.makeKey()
+        window?.performDrag(with: event)
     }
     
-    override func mouseDragged(with event: NSEvent) {
-        guard let window = self.window,
-              let initialLocation = initialLocation else { return }
-        
-        let currentLocation = event.locationInWindow
-        let deltaX = currentLocation.x - initialLocation.x
-        let deltaY = currentLocation.y - initialLocation.y
-        
-        var newOrigin = window.frame.origin
-        newOrigin.x += deltaX
-        newOrigin.y += deltaY
-        
-        window.setFrameOrigin(newOrigin)
+}
+
+private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
     }
-    
-    override func mouseUp(with event: NSEvent) {
-        initialLocation = nil
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeKey()
+        super.mouseDown(with: event)
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 
 struct KeyboardShortcut: Equatable {
@@ -7,7 +8,7 @@ struct KeyboardShortcut: Equatable {
 
     init(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
         self.keyCode = keyCode
-        self.modifiers = modifiers.intersection(.deviceIndependentFlagsMask)
+        self.modifiers = modifiers.normalizedShortcutModifiers
     }
 
     init?(rawValue: String) {
@@ -19,7 +20,7 @@ struct KeyboardShortcut: Equatable {
         }
 
         self.keyCode = keyCode
-        self.modifiers = NSEvent.ModifierFlags(rawValue: rawModifiers).intersection(.deviceIndependentFlagsMask)
+        self.modifiers = NSEvent.ModifierFlags(rawValue: rawModifiers).normalizedShortcutModifiers
     }
 
     var rawValue: String {
@@ -39,7 +40,26 @@ struct KeyboardShortcut: Equatable {
 
     func matches(_ event: NSEvent) -> Bool {
         event.keyCode == keyCode &&
-        event.modifierFlags.intersection(.deviceIndependentFlagsMask) == modifiers
+        event.modifierFlags.normalizedShortcutModifiers == modifiers
+    }
+
+    var carbonModifiers: UInt32 {
+        var result: UInt32 = 0
+
+        if modifiers.contains(.command) {
+            result |= UInt32(cmdKey)
+        }
+        if modifiers.contains(.option) {
+            result |= UInt32(optionKey)
+        }
+        if modifiers.contains(.control) {
+            result |= UInt32(controlKey)
+        }
+        if modifiers.contains(.shift) {
+            result |= UInt32(shiftKey)
+        }
+
+        return result
     }
 
     private var keyDisplayName: String {
@@ -65,6 +85,12 @@ struct KeyboardShortcut: Equatable {
     ]
 }
 
+extension NSEvent.ModifierFlags {
+    var normalizedShortcutModifiers: NSEvent.ModifierFlags {
+        intersection([.command, .option, .control, .shift])
+    }
+}
+
 enum ShortcutAction: String, CaseIterable, Identifiable {
     case toggleOverlay
     case toggleListening
@@ -76,6 +102,14 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case selectGemini
 
     var id: String { rawValue }
+
+    var hotKeyID: UInt32 {
+        UInt32(Self.allCases.firstIndex(of: self) ?? 0) + 1
+    }
+
+    static func action(forHotKeyID id: UInt32) -> ShortcutAction? {
+        allCases.first { $0.hotKeyID == id }
+    }
 
     var title: String {
         switch self {

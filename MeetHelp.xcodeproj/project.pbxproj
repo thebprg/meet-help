@@ -20,6 +20,7 @@
 		011 /* DeepgramService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111; };
 		012 /* LLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112; };
 		013 /* KeyboardShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 115; };
+		014 /* MarkdownRenderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,6 +40,7 @@
 		113 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		114 /* MeetHelp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MeetHelp.entitlements; sourceTree = "<group>"; };
 		115 /* KeyboardShortcut.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardShortcut.swift; sourceTree = "<group>"; };
+		116 /* MarkdownRenderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -150,6 +152,7 @@
 			isa = PBXGroup;
 			children = (
 				107 /* MessageBubble.swift */,
+				116 /* MarkdownRenderView.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -235,6 +238,7 @@
 				011 /* DeepgramService.swift in Sources */,
 				012 /* LLMService.swift in Sources */,
 				013 /* KeyboardShortcut.swift in Sources */,
+				014 /* MarkdownRenderView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

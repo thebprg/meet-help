@@ -1,8 +1,17 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
+    private static weak var shared: AppDelegate?
+    private static let hotKeySignature = OSType(
+        UInt32(UInt8(ascii: "M")) << 24 |
+        UInt32(UInt8(ascii: "H")) << 16 |
+        UInt32(UInt8(ascii: "K")) << 8 |
+        UInt32(UInt8(ascii: "Y"))
+    )
+
     private var statusItem: NSStatusItem?
     private var ghostWindowController: GhostWindowController?
     private var settingsWindow: NSWindow?
@@ -12,7 +21,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let deepgramService = DeepgramService()
     private let llmService = LLMService()
 
-    private var globalKeyMonitor: Any?
+    private var hotKeyEventHandler: EventHandlerRef?
+    private var registeredHotKeys: [UInt32: EventHotKeyRef] = [:]
     private var localKeyMonitor: Any?
     private var globalPeekMonitor: Any?
     private var localPeekMonitor: Any?
@@ -28,17 +38,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
+            Self.shared = self
             NSApp.setActivationPolicy(.accessory)
             setupStatusItem()
             setupGhostWindow()
             setupGlobalHotkey()
-            setupPeekMonitor()
         }
     }
 
     nonisolated func applicationWillTerminate(_ notification: Notification) {
         Task { @MainActor in
             cancelPendingLLMWork()
+            unregisterGlobalHotkeys()
             transcriptState.endTranscriptLog()
             await audioManager.stopCapture()
             deepgramService.disconnect()
@@ -100,6 +111,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onClearHistory: { [weak self] in
                 self?.clearCurrentSession()
+            },
+            onSubmitQuestion: { [weak self] question in
+                self?.submitManualQuestion(question)
             }
         )
 
@@ -112,25 +126,111 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Global Hotkey
 
     private func setupGlobalHotkey() {
-        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            Task { @MainActor [weak self] in
-                self?.handleShortcut(event)
-            }
-        }
+        installHotKeyEventHandler()
+        registerGlobalHotkeys()
 
-        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if self?.settingsWindow?.isKeyWindow == true {
-                return event
-            }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(shortcutSettingsDidChange),
+            name: UserDefaults.didChangeNotification,
+            object: nil
+        )
 
-            if self?.shortcutAction(for: event) != nil {
-                Task { @MainActor [weak self] in
-                    self?.handleShortcut(event)
+        localKeyMonitor = nil
+    }
+
+    private func installHotKeyEventHandler() {
+        guard hotKeyEventHandler == nil else { return }
+
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+
+        let status = InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, event, _ in
+                var hotKeyID = EventHotKeyID()
+                let status = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hotKeyID
+                )
+
+                guard status == noErr,
+                      hotKeyID.signature == AppDelegate.hotKeySignature else {
+                    return noErr
                 }
-                return nil
-            }
-            return event
+
+                Task { @MainActor in
+                    AppDelegate.shared?.handleHotKey(id: hotKeyID.id)
+                }
+
+                return noErr
+            },
+            1,
+            &eventType,
+            nil,
+            &hotKeyEventHandler
+        )
+
+        if status != noErr {
+            print("[App] Failed to install hotkey handler: \(status)")
         }
+    }
+
+    private func registerGlobalHotkeys() {
+        unregisterGlobalHotkeys()
+
+        for action in ShortcutAction.allCases {
+            let shortcut = action.shortcut
+            guard shortcut.carbonModifiers != 0 else { continue }
+
+            var hotKeyRef: EventHotKeyRef?
+            let hotKeyID = EventHotKeyID(
+                signature: Self.hotKeySignature,
+                id: action.hotKeyID
+            )
+
+            let status = RegisterEventHotKey(
+                UInt32(shortcut.keyCode),
+                shortcut.carbonModifiers,
+                hotKeyID,
+                GetApplicationEventTarget(),
+                0,
+                &hotKeyRef
+            )
+
+            if status == noErr, let hotKeyRef {
+                registeredHotKeys[action.hotKeyID] = hotKeyRef
+            } else {
+                print("[App] Failed to register shortcut \(action.title): \(status)")
+            }
+        }
+    }
+
+    private func unregisterGlobalHotkeys() {
+        for hotKeyRef in registeredHotKeys.values {
+            UnregisterEventHotKey(hotKeyRef)
+        }
+        registeredHotKeys.removeAll()
+    }
+
+    @objc private func shortcutSettingsDidChange() {
+        registerGlobalHotkeys()
+    }
+
+    private func handleHotKey(id: UInt32) {
+        guard settingsWindow?.isKeyWindow != true,
+              let action = ShortcutAction.action(forHotKeyID: id) else {
+            return
+        }
+
+        handleShortcut(action)
     }
 
     private func shortcutAction(for event: NSEvent) -> ShortcutAction? {
@@ -141,6 +241,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleShortcut(_ event: NSEvent) {
         guard let action = shortcutAction(for: event) else { return }
+
+        handleShortcut(action)
+    }
+
+    private func handleShortcut(_ action: ShortcutAction) {
 
         switch action {
         case .toggleOverlay:
@@ -266,6 +371,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func enqueueLLMRequest(questionID: UUID, sessionID: UUID) {
         pendingLLMRequests.append(LLMRequest(questionID: questionID, sessionID: sessionID))
         processNextLLMRequest()
+    }
+
+    private func submitManualQuestion(_ question: String) {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let questionID = transcriptState.addInterviewerQuestion(trimmed)
+        enqueueLLMRequest(questionID: questionID, sessionID: currentSessionID)
     }
 
     private func processNextLLMRequest() {

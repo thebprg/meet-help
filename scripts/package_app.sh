@@ -9,9 +9,13 @@ CONFIGURATION="${CONFIGURATION:-Release}"
 DERIVED_DATA="${DERIVED_DATA:-.xcodebuild}"
 PRODUCTS_DIR="$DERIVED_DATA/Build/Products/$CONFIGURATION"
 SOURCE_APP="$PRODUCTS_DIR/$APP_NAME.app"
+SWIFTPM_CONFIGURATION="$(echo "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
+SWIFTPM_APP=".build/arm64-apple-macosx/$SWIFTPM_CONFIGURATION/$APP_NAME.app"
+SWIFTPM_BINARY=".build/arm64-apple-macosx/$SWIFTPM_CONFIGURATION/$APP_NAME"
 OUTPUT_APP="$APP_NAME.app"
 OUTPUT_ZIP="$APP_NAME.zip"
 ENTITLEMENTS="$APP_NAME/Resources/$APP_NAME.entitlements"
+INFO_PLIST="$APP_NAME/Resources/Info.plist"
 
 if [[ ! -d "$PROJECT" ]]; then
   echo "error: $PROJECT not found. Run this script from the repository root." >&2
@@ -22,25 +26,40 @@ if [[ -d /Applications/Xcode.app && -z "${DEVELOPER_DIR:-}" ]]; then
   export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 fi
 
-if ! command -v xcodebuild >/dev/null 2>&1; then
-  echo "error: xcodebuild is required to package $APP_NAME.app." >&2
-  exit 1
-fi
+if command -v xcodebuild >/dev/null 2>&1 && xcodebuild -version >/dev/null 2>&1; then
+  echo "Building $SCHEME ($CONFIGURATION) with Xcode..."
+  xcodebuild \
+    -project "$PROJECT" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -derivedDataPath "$DERIVED_DATA" \
+    CODE_SIGN_IDENTITY=- \
+    CODE_SIGN_STYLE=Manual \
+    DEVELOPMENT_TEAM= \
+    build
 
-echo "Building $SCHEME ($CONFIGURATION) with Xcode..."
-xcodebuild \
-  -project "$PROJECT" \
-  -scheme "$SCHEME" \
-  -configuration "$CONFIGURATION" \
-  -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGN_IDENTITY=- \
-  CODE_SIGN_STYLE=Manual \
-  DEVELOPMENT_TEAM= \
-  build
+  if [[ ! -d "$SOURCE_APP" ]]; then
+    echo "error: expected app product was not created at $SOURCE_APP" >&2
+    exit 1
+  fi
+else
+  echo "Xcode is unavailable; building $APP_NAME ($CONFIGURATION) with SwiftPM..."
+  swift build --configuration "$SWIFTPM_CONFIGURATION"
 
-if [[ ! -d "$SOURCE_APP" ]]; then
-  echo "error: expected app product was not created at $SOURCE_APP" >&2
-  exit 1
+  if [[ -d "$SWIFTPM_APP" ]]; then
+    SOURCE_APP="$SWIFTPM_APP"
+  elif [[ -f "$SWIFTPM_BINARY" ]]; then
+    echo "Creating app bundle from SwiftPM executable..."
+    SOURCE_APP="$SWIFTPM_APP"
+    rm -rf "$SOURCE_APP"
+    mkdir -p "$SOURCE_APP/Contents/MacOS" "$SOURCE_APP/Contents/Resources"
+    cp "$SWIFTPM_BINARY" "$SOURCE_APP/Contents/MacOS/$APP_NAME"
+    cp "$INFO_PLIST" "$SOURCE_APP/Contents/Info.plist"
+    printf "APPL????" > "$SOURCE_APP/Contents/PkgInfo"
+  else
+    echo "error: expected SwiftPM product was not created at $SWIFTPM_BINARY" >&2
+    exit 1
+  fi
 fi
 
 echo "Copying app product to $OUTPUT_APP..."
