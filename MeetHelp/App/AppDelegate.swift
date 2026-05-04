@@ -19,6 +19,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let transcriptState = TranscriptState()
     private let audioManager = AudioCaptureManager()
     private let deepgramService = DeepgramService()
+    private let microphoneManager = MicrophoneCaptureManager()
+    private let microphoneDeepgramService = DeepgramService()
     private let llmService = LLMService()
 
     private var hotKeyEventHandler: EventHandlerRef?
@@ -35,6 +37,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var llmTask: Task<Void, Never>?
     private var activeLLMRequestID: UUID?
     private var isProcessingLLMQueue = false
+    private var microphoneStopTask: Task<Void, Never>?
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
@@ -52,7 +55,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             unregisterGlobalHotkeys()
             transcriptState.endTranscriptLog()
             await audioManager.stopCapture()
+            microphoneManager.stopCapture()
             deepgramService.disconnect()
+            microphoneDeepgramService.disconnect()
         }
     }
 
@@ -109,6 +114,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             onToggleListening: { [weak self] in
                 self?.toggleListening()
             },
+            onToggleMicrophonePrompt: { [weak self] in
+                self?.toggleMicrophonePrompt()
+            },
             onClearHistory: { [weak self] in
                 self?.clearCurrentSession()
             },
@@ -142,10 +150,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func installHotKeyEventHandler() {
         guard hotKeyEventHandler == nil else { return }
 
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+        var eventTypes = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
+        ]
 
         let status = InstallEventHandler(
             GetApplicationEventTarget(),
@@ -166,14 +174,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     return noErr
                 }
 
+                let eventKind = GetEventKind(event)
                 Task { @MainActor in
-                    AppDelegate.shared?.handleHotKey(id: hotKeyID.id)
+                    AppDelegate.shared?.handleHotKey(
+                        id: hotKeyID.id,
+                        isPressed: eventKind == UInt32(kEventHotKeyPressed)
+                    )
                 }
 
                 return noErr
             },
-            1,
-            &eventType,
+            eventTypes.count,
+            &eventTypes,
             nil,
             &hotKeyEventHandler
         )
@@ -224,12 +236,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         registerGlobalHotkeys()
     }
 
-    private func handleHotKey(id: UInt32) {
+    private func handleHotKey(id: UInt32, isPressed: Bool) {
         guard settingsWindow?.isKeyWindow != true,
               let action = ShortcutAction.action(forHotKeyID: id) else {
             return
         }
 
+        if action == .holdMicrophonePrompt {
+            if isPressed {
+                startMicrophonePrompt()
+            } else {
+                stopMicrophonePromptAndSubmit()
+            }
+            return
+        }
+
+        guard isPressed else { return }
         handleShortcut(action)
     }
 
@@ -264,6 +286,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             selectOpenRouterModel(index: 3)
         case .selectGemini:
             selectGeminiProvider()
+        case .holdMicrophonePrompt:
+            break
         }
     }
 
@@ -366,6 +390,81 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         deepgramService.disconnect()
 
         print("[App] Stopped listening")
+    }
+
+    private func toggleMicrophonePrompt() {
+        if transcriptState.isRecordingMicPrompt {
+            stopMicrophonePromptAndSubmit()
+        } else {
+            startMicrophonePrompt()
+        }
+    }
+
+    private func startMicrophonePrompt() {
+        guard !transcriptState.isRecordingMicPrompt else { return }
+
+        microphoneStopTask?.cancel()
+        microphoneStopTask = nil
+        transcriptState.micPromptTranscript = ""
+
+        microphoneDeepgramService.connect(
+            onTranscriptUpdate: { [weak self] transcript in
+                Task { @MainActor [weak self] in
+                    self?.transcriptState.micPromptTranscript = transcript
+                }
+            },
+            onUtteranceEnd: { [weak self] transcript in
+                Task { @MainActor [weak self] in
+                    self?.transcriptState.micPromptTranscript = transcript
+                }
+            }
+        )
+
+        Task {
+            let didStart = await microphoneManager.startCapture { [weak self] audioData in
+                self?.microphoneDeepgramService.sendAudio(audioData)
+            }
+
+            if didStart {
+                transcriptState.isRecordingMicPrompt = true
+                print("[App] Started microphone prompt")
+            } else {
+                microphoneDeepgramService.disconnect()
+                transcriptState.isRecordingMicPrompt = false
+                print("[App] Failed to start microphone prompt")
+            }
+        }
+    }
+
+    private func stopMicrophonePromptAndSubmit() {
+        guard transcriptState.isRecordingMicPrompt else { return }
+
+        transcriptState.isRecordingMicPrompt = false
+        microphoneManager.stopCapture()
+        microphoneDeepgramService.requestFinalize()
+
+        microphoneStopTask?.cancel()
+        microphoneStopTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+
+            let transcript = self.microphoneDeepgramService.finishCurrentUtterance()
+            self.microphoneDeepgramService.disconnect()
+
+            let prompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.transcriptState.micPromptTranscript = prompt
+
+            guard !prompt.isEmpty else {
+                print("[App] Microphone prompt was empty")
+                return
+            }
+
+            self.submitManualQuestion(prompt)
+            self.transcriptState.micPromptTranscript = ""
+            print("[App] Submitted microphone prompt")
+        }
     }
 
     private func enqueueLLMRequest(questionID: UUID, sessionID: UUID) {

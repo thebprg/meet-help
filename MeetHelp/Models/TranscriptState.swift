@@ -6,6 +6,8 @@ class TranscriptState: ObservableObject {
     @Published var currentTranscript: String = ""
     @Published var messages: [ChatMessage] = []
     @Published var isListening: Bool = false
+    @Published var isRecordingMicPrompt: Bool = false
+    @Published var micPromptTranscript: String = ""
     @Published var isProcessing: Bool = false
     @Published var codeContext: String = ""
     @Published var showHistory: Bool = true // Configurable: single answer vs history
@@ -157,6 +159,7 @@ class TranscriptState: ObservableObject {
     func clearHistory() {
         messages = [ChatMessage(role: .system, content: systemPrompt)]
         currentTranscript = ""
+        micPromptTranscript = ""
     }
     
     func endTranscriptLog() {

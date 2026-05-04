@@ -9,13 +9,19 @@ class DeepgramService: NSObject, ObservableObject {
     private var urlSession: URLSession?
     
     private var onUtteranceEnd: ((String) -> Void)?
+    private var onTranscriptUpdate: ((String) -> Void)?
     private var accumulatedTranscript = ""
+    private var latestFullTranscript = ""
     
     override init() {
         super.init()
     }
     
-    func connect(onUtteranceEnd: @escaping (String) -> Void) {
+    func connect(
+        onTranscriptUpdate: ((String) -> Void)? = nil,
+        onUtteranceEnd: @escaping (String) -> Void
+    ) {
+        self.onTranscriptUpdate = onTranscriptUpdate
         self.onUtteranceEnd = onUtteranceEnd
 
         let apiKey = Config.deepgramAPIKey
@@ -64,7 +70,32 @@ class DeepgramService: NSObject, ObservableObject {
         urlSession = nil
         isConnected = false
         accumulatedTranscript = ""
+        latestFullTranscript = ""
+        currentTranscript = ""
+        onTranscriptUpdate = nil
         print("[Deepgram] Disconnected")
+    }
+
+    func requestFinalize() {
+        guard isConnected, let task = webSocketTask else { return }
+
+        task.send(.string("{\"type\":\"CloseStream\"}")) { error in
+            if let error {
+                print("[Deepgram] Finalize send error: \(error)")
+            }
+        }
+    }
+
+    func finishCurrentUtterance() -> String {
+        let finalTranscript = accumulatedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackTranscript = latestFullTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = finalTranscript.isEmpty ? fallbackTranscript : finalTranscript
+
+        accumulatedTranscript = ""
+        latestFullTranscript = ""
+        currentTranscript = ""
+
+        return result
     }
     
     func sendAudio(_ data: Data) {
@@ -126,6 +157,7 @@ class DeepgramService: NSObject, ObservableObject {
                 }
             }
             accumulatedTranscript = ""
+            latestFullTranscript = ""
             return
         }
         
@@ -145,10 +177,12 @@ class DeepgramService: NSObject, ObservableObject {
                 // Show rolling/latest text for caption-like display
                 // Combine accumulated + current interim, then take last ~150 chars
                 let fullText = (accumulatedTranscript + " " + transcript).trimmingCharacters(in: .whitespacesAndNewlines)
+                latestFullTranscript = fullText
                 let displayText = getLastPortionOfText(fullText, maxLength: 150)
                 
                 DispatchQueue.main.async {
                     self.currentTranscript = displayText
+                    self.onTranscriptUpdate?(displayText)
                 }
             }
         } catch {

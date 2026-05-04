@@ -7,6 +7,7 @@ struct ChatOverlayView: View {
     
     // Callback for toggling listening state
     var onToggleListening: (() -> Void)?
+    var onToggleMicrophonePrompt: (() -> Void)?
     var onClearHistory: (() -> Void)?
     var onSubmitQuestion: ((String) -> Void)?
 
@@ -219,51 +220,67 @@ struct ChatOverlayView: View {
     }
 
     private var composerView: some View {
-        HStack(spacing: 8) {
-            TextField("Ask a question", text: $manualQuestion, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundColor(.white)
-                .lineLimit(1...3)
+        VStack(spacing: 6) {
+            if !transcriptState.micPromptTranscript.isEmpty {
+                HStack {
+                    Text(transcriptState.micPromptTranscript)
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.78))
+                        .lineLimit(2)
+                    Spacer()
+                }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(Color.white.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 7))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                )
-                .onSubmit {
-                    submitManualQuestion()
+                .padding(.vertical, 5)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+
+            HStack(spacing: 8) {
+                TextField("Ask a starter clue", text: $manualQuestion, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundColor(.white)
+                    .lineLimit(1...3)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7)
+                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+                    .onSubmit {
+                        submitManualQuestion()
+                    }
+
+                if transcriptState.isProcessing {
+                    TypingIndicator()
+                        .padding(.trailing, 2)
                 }
 
-            if transcriptState.isProcessing {
-                TypingIndicator()
-                    .padding(.trailing, 2)
-            }
+                Button(action: {
+                    onToggleMicrophonePrompt?()
+                }) {
+                    Image(systemName: transcriptState.isRecordingMicPrompt ? "mic.fill" : "mic")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(transcriptState.isRecordingMicPrompt ? .green : .white.opacity(0.72))
+                        .frame(width: 26, height: 26)
+                        .background(Color.white.opacity(0.08))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(transcriptState.isRecordingMicPrompt ? "Stop microphone starter clue" : "Start microphone starter clue")
 
-            Button(action: {
-                onToggleListening?()
-            }) {
-                Image(systemName: transcriptState.isListening ? "mic.fill" : "mic.slash.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(transcriptState.isListening ? .green : .white.opacity(0.72))
-                    .frame(width: 26, height: 26)
-                    .background(Color.white.opacity(0.08))
-                    .clipShape(Circle())
+                Button(action: submitManualQuestion) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(manualQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .white.opacity(0.35) : .white.opacity(0.9))
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.plain)
+                .disabled(manualQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Submit starter clue")
             }
-            .buttonStyle(.plain)
-            .help(transcriptState.isListening ? "Pause voice input" : "Start voice input")
-
-            Button(action: submitManualQuestion) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(manualQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .white.opacity(0.35) : .white.opacity(0.9))
-                    .frame(width: 26, height: 26)
-            }
-            .buttonStyle(.plain)
-            .disabled(manualQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .help("Submit question")
         }
         .padding(.horizontal, horizontalMargin)
         .padding(.vertical, 7)
@@ -339,193 +356,11 @@ private struct ConversationTurn: Identifiable {
 private struct SlimScrollView<Content: View>: View {
     @ViewBuilder var content: Content
 
-    @StateObject private var scrollController = SlimScrollController()
-    @State private var viewportHeight: CGFloat = 0
-    @State private var contentHeight: CGFloat = 0
-    @State private var scrollOffset: CGFloat = 0
-
-    private let coordinateSpaceName = "slim-scroll-view"
-
     var body: some View {
-        GeometryReader { outerProxy in
-            ScrollView {
-                VStack(spacing: 0) {
-                    GeometryReader { proxy in
-                        Color.clear
-                            .preference(
-                                key: SlimScrollOffsetPreferenceKey.self,
-                                value: proxy.frame(in: .named(coordinateSpaceName)).minY
-                            )
-                    }
-                    .frame(height: 0)
-
-                    content
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear
-                                    .preference(
-                                        key: SlimScrollContentHeightPreferenceKey.self,
-                                        value: proxy.size.height
-                                    )
-                            }
-                        )
-                }
-            }
-            .background(SlimScrollViewResolver(controller: scrollController))
-            .coordinateSpace(name: coordinateSpaceName)
-            .scrollIndicators(.hidden)
-            .onAppear {
-                viewportHeight = outerProxy.size.height
-            }
-            .onChange(of: outerProxy.size.height) { newValue in
-                viewportHeight = newValue
-            }
-            .onPreferenceChange(SlimScrollOffsetPreferenceKey.self) { value in
-                scrollOffset = max(0, -value)
-            }
-            .onPreferenceChange(SlimScrollContentHeightPreferenceKey.self) { value in
-                contentHeight = value
-            }
-            .overlay(alignment: .trailing) {
-                SlimScrollIndicator(
-                    viewportHeight: viewportHeight,
-                    contentHeight: contentHeight,
-                    scrollOffset: scrollOffset,
-                    onScroll: { progress in
-                        scrollController.scroll(toProgress: progress)
-                    }
-                )
-                .padding(.vertical, 4)
-                .padding(.trailing, 2)
-            }
+        ScrollView {
+            content
         }
-    }
-}
-
-private struct SlimScrollIndicator: View {
-    let viewportHeight: CGFloat
-    let contentHeight: CGFloat
-    let scrollOffset: CGFloat
-    let onScroll: (CGFloat) -> Void
-
-    private var isScrollable: Bool {
-        contentHeight > viewportHeight + 1
-    }
-
-    private var thumbHeight: CGFloat {
-        guard isScrollable else { return 0 }
-        return max(26, viewportHeight * (viewportHeight / contentHeight))
-    }
-
-    private var thumbOffset: CGFloat {
-        guard isScrollable else { return 0 }
-        let maxScroll = max(contentHeight - viewportHeight, 1)
-        let maxThumbTravel = max(viewportHeight - thumbHeight - 8, 0)
-        return min(max(scrollOffset / maxScroll, 0), 1) * maxThumbTravel
-    }
-
-    var body: some View {
-        if isScrollable {
-            GeometryReader { proxy in
-                ZStack(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.08))
-                        .frame(width: 1)
-                        .frame(maxHeight: .infinity)
-
-                    Rectangle()
-                        .fill(Color.white.opacity(0.42))
-                        .frame(width: 2, height: thumbHeight)
-                        .offset(y: thumbOffset)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            let availableTravel = max(proxy.size.height - thumbHeight, 1)
-                            let progress = min(max((value.location.y - thumbHeight / 2) / availableTravel, 0), 1)
-                            onScroll(progress)
-                        }
-                )
-            }
-            .frame(width: 8)
-        }
-    }
-}
-
-private final class SlimScrollController: ObservableObject {
-    weak var scrollView: NSScrollView?
-
-    func scroll(toProgress progress: CGFloat) {
-        guard let scrollView else { return }
-
-        let clipView = scrollView.contentView
-        let documentHeight = scrollView.documentView?.bounds.height ?? 0
-        let viewportHeight = clipView.bounds.height
-        let maxOffset = max(documentHeight - viewportHeight, 0)
-        let targetOffset = min(max(progress, 0), 1) * maxOffset
-
-        clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: targetOffset))
-        scrollView.reflectScrolledClipView(clipView)
-    }
-}
-
-private struct SlimScrollViewResolver: NSViewRepresentable {
-    @ObservedObject var controller: SlimScrollController
-
-    func makeNSView(context: Context) -> ResolverView {
-        ResolverView(controller: controller)
-    }
-
-    func updateNSView(_ nsView: ResolverView, context: Context) {
-        nsView.controller = controller
-        nsView.resolveScrollView()
-    }
-
-    final class ResolverView: NSView {
-        weak var controller: SlimScrollController?
-
-        init(controller: SlimScrollController) {
-            self.controller = controller
-            super.init(frame: .zero)
-        }
-
-        required init?(coder: NSCoder) {
-            super.init(coder: coder)
-        }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            resolveScrollView()
-        }
-
-        func resolveScrollView() {
-            var view: NSView? = self
-            while let current = view {
-                if let scrollView = current as? NSScrollView {
-                    controller?.scrollView = scrollView
-                    return
-                }
-                view = current.superview
-            }
-        }
-    }
-}
-
-private struct SlimScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private struct SlimScrollContentHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+        .scrollIndicators(.automatic)
     }
 }
 
