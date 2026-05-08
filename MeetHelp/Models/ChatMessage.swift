@@ -12,6 +12,7 @@ struct ChatMessage: Identifiable, Codable {
         case user
         case assistant
         case interviewer // Transcribed question
+        case starterClue // User-provided directive/starter for the answer
     }
     
     init(

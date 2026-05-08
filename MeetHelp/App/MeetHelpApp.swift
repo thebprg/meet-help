@@ -9,5 +9,8 @@ struct MeetHelpApp: App {
         Settings {
             EmptyView()
         }
+        .commands {
+            CommandGroup(replacing: .appSettings) {}
+        }
     }
 }

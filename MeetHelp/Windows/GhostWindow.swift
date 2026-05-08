@@ -120,6 +120,8 @@ class CornerResizeHandle: NSView {
     private var initialWindowFrame: NSRect?
     private var isHovering = false
     private var trackingArea: NSTrackingArea?
+    private var windowObservers: [NSObjectProtocol] = []
+    private let activeEdgeSize: CGFloat = 8
     let corner: ResizeCorner
     
     init(corner: ResizeCorner) {
@@ -146,10 +148,14 @@ class CornerResizeHandle: NSView {
     
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        // Reset state when view moves
-        isHovering = false
-        needsDisplay = true
+        removeWindowObservers()
+        resetHover()
+        installWindowObservers()
         updateTrackingAreas()
+    }
+
+    deinit {
+        removeWindowObservers()
     }
     
     override func updateTrackingAreas() {
@@ -157,10 +163,9 @@ class CornerResizeHandle: NSView {
         if let existing = trackingArea {
             removeTrackingArea(existing)
         }
-        // Use inVisibleRect and assumeInside:false for reliable exit detection
         trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            rect: activeRect,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .enabledDuringMouseDrag],
             owner: self,
             userInfo: nil
         )
@@ -168,20 +173,27 @@ class CornerResizeHandle: NSView {
     }
     
     override func mouseEntered(with event: NSEvent) {
-        isHovering = true
-        needsDisplay = true
+        setHovering(true)
     }
     
     override func mouseExited(with event: NSEvent) {
-        isHovering = false
-        needsDisplay = true
+        resetHover()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        updateHoverForCurrentMouseLocation()
     }
     
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .crosshair)
+        addCursorRect(activeRect, cursor: .arrow)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        activeRect.contains(point) ? self : nil
     }
     
     override func mouseDown(with event: NSEvent) {
+        guard activeRect.contains(convert(event.locationInWindow, from: nil)) else { return }
         initialMouseLocation = NSEvent.mouseLocation
         initialWindowFrame = window?.frame
     }
@@ -190,6 +202,7 @@ class CornerResizeHandle: NSView {
         guard let window = self.window,
               let initialMouse = initialMouseLocation,
               let initialFrame = initialWindowFrame else { return }
+        setHovering(true)
         
         let currentMouse = NSEvent.mouseLocation
         let deltaX = currentMouse.x - initialMouse.x
@@ -231,6 +244,68 @@ class CornerResizeHandle: NSView {
     override func mouseUp(with event: NSEvent) {
         initialMouseLocation = nil
         initialWindowFrame = nil
+        DispatchQueue.main.async { [weak self] in
+            self?.updateHoverForCurrentMouseLocation()
+        }
+    }
+
+    private func installWindowObservers() {
+        guard let window else { return }
+
+        let notifications: [Notification.Name] = [
+            NSWindow.didResignKeyNotification,
+            NSWindow.didResignMainNotification,
+            NSWindow.didMiniaturizeNotification
+        ]
+
+        windowObservers = notifications.map { name in
+            NotificationCenter.default.addObserver(
+                forName: name,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.resetHover()
+            }
+        }
+    }
+
+    private func removeWindowObservers() {
+        windowObservers.forEach(NotificationCenter.default.removeObserver)
+        windowObservers.removeAll()
+    }
+
+    private func updateHoverForCurrentMouseLocation() {
+        guard let window else {
+            resetHover()
+            return
+        }
+
+        let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let localPoint = convert(windowPoint, from: nil)
+        setHovering(activeRect.contains(localPoint))
+    }
+
+    private func setHovering(_ newValue: Bool) {
+        guard isHovering != newValue else { return }
+        isHovering = newValue
+        needsDisplay = true
+    }
+
+    private func resetHover() {
+        setHovering(false)
+    }
+
+    private var activeRect: NSRect {
+        switch corner {
+        case .topLeft:
+            return NSRect(x: 0, y: bounds.height - activeEdgeSize, width: activeEdgeSize, height: activeEdgeSize)
+        case .topRight:
+            return NSRect(x: bounds.width - activeEdgeSize, y: bounds.height - activeEdgeSize, width: activeEdgeSize, height: activeEdgeSize)
+        case .bottomLeft:
+            return NSRect(x: 0, y: 0, width: activeEdgeSize, height: activeEdgeSize)
+        case .bottomRight:
+            return NSRect(x: bounds.width - activeEdgeSize, y: 0, width: activeEdgeSize, height: activeEdgeSize)
+        }
     }
     
     override func draw(_ dirtyRect: NSRect) {

@@ -8,12 +8,26 @@ struct ChatOverlayView: View {
     // Callback for toggling listening state
     var onToggleListening: (() -> Void)?
     var onToggleMicrophonePrompt: (() -> Void)?
+    var onCaptureScreen: (() -> Void)?
+    var onDeletePreviousQuestion: (() -> Void)?
     var onClearHistory: (() -> Void)?
     var onSubmitQuestion: ((String) -> Void)?
 
     @State private var manualQuestion = ""
 
     private let horizontalMargin: CGFloat = 8
+
+    private var screenCaptureHelpText: String {
+        if transcriptState.isAnalyzingScreen {
+            return "Analyzing screen"
+        }
+
+        if transcriptState.screenContext.isEmpty {
+            return "Capture screen context"
+        }
+
+        return "Screen context ready. Click to refresh"
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -46,60 +60,82 @@ struct ChatOverlayView: View {
     // MARK: - Header
     
     private var headerView: some View {
-        ZStack {
+        HStack(spacing: 10) {
+            // Clickable status indicator (toggles listening)
+            Button(action: {
+                onToggleListening?()
+            }) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(transcriptState.isListening ? Color.green : Color.red.opacity(0.8))
+                        .frame(width: 10, height: 10)
+                        .shadow(color: transcriptState.isListening ? .green.opacity(0.6) : .clear, radius: 4)
+                    
+                    Text(transcriptState.isListening ? "In-use" : "Paused")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+            .help("Click to toggle listening (⌘⇧L)")
+
             WindowDragRegion()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            HStack(spacing: 10) {
-                // Clickable status indicator (toggles listening)
-                Button(action: {
-                    onToggleListening?()
-                }) {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(transcriptState.isListening ? Color.green : Color.red.opacity(0.8))
-                            .frame(width: 10, height: 10)
-                            .shadow(color: transcriptState.isListening ? .green.opacity(0.6) : .clear, radius: 4)
-                        
-                        Text(transcriptState.isListening ? "In-use" : "Paused")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.white.opacity(0.08))
-                    .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
-                .help("Click to toggle listening (⌘⇧L)")
-                
-                Spacer()
-                
-                // Toggle history mode
-                Button(action: {
-                    transcriptState.showHistory.toggle()
-                }) {
-                    Image(systemName: transcriptState.showHistory ? "rectangle.stack.fill" : "rectangle.fill")
-                        .font(.system(size: 13))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-                .help(transcriptState.showHistory ? "Show single answer" : "Show history")
-                
-                // Clear history
-                Button(action: {
-                    onClearHistory?()
-                }) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 13))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-                .help("Clear history")
+            Button(action: {
+                onCaptureScreen?()
+            }) {
+                let hasScreenContext = !transcriptState.screenContext.isEmpty
+                Image(systemName: transcriptState.isAnalyzingScreen ? "camera.viewfinder" : "viewfinder")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor((transcriptState.isAnalyzingScreen || hasScreenContext) ? .green : .white.opacity(0.82))
+                    .frame(width: 26, height: 26)
+                    .background(Color.white.opacity((transcriptState.isAnalyzingScreen || hasScreenContext) ? 0.14 : 0.08))
+                    .clipShape(Circle())
             }
-            .padding(.horizontal, horizontalMargin)
-            .padding(.vertical, 8)
+            .buttonStyle(.plain)
+            .disabled(transcriptState.isAnalyzingScreen)
+            .help(screenCaptureHelpText)
+            
+            // Toggle history mode
+            Button(action: {
+                transcriptState.showHistory.toggle()
+            }) {
+                Image(systemName: transcriptState.showHistory ? "rectangle.stack.fill" : "rectangle.fill")
+                    .font(.system(size: 13))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .help(transcriptState.showHistory ? "Show single answer" : "Show history")
+
+            Button(action: {
+                onDeletePreviousQuestion?()
+            }) {
+                Image(systemName: "minus.circle")
+                    .font(.system(size: 13))
+                    .foregroundColor(canDeletePreviousQuestion ? .white.opacity(0.7) : .white.opacity(0.3))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canDeletePreviousQuestion)
+            .help("Delete previous question")
+            
+            // Clear history
+            Button(action: {
+                onClearHistory?()
+            }) {
+                Image(systemName: "trash")
+                    .font(.system(size: 13))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .help("Clear history")
         }
+        .padding(.horizontal, horizontalMargin)
+        .padding(.vertical, 8)
         .frame(height: 40)
         .background(Color(nsColor: Config.headerBackgroundColor))
     }
@@ -298,7 +334,7 @@ struct ChatOverlayView: View {
     // MARK: - Helpers
     
     private var visibleTurns: [ConversationTurn] {
-        let questions = transcriptState.messages.filter { $0.role == .interviewer }
+        let questions = transcriptState.messages.filter { $0.role == .interviewer || $0.role == .starterClue }
         let answers = transcriptState.messages.filter { $0.role == .assistant }
 
         return questions.reversed().map { question in
@@ -312,6 +348,10 @@ struct ChatOverlayView: View {
     
     private var lastAssistantMessage: ChatMessage? {
         transcriptState.messages.last { $0.role == .assistant }
+    }
+
+    private var canDeletePreviousQuestion: Bool {
+        transcriptState.canDeletePreviousQuestion
     }
     
     /// Process message content to strip <think> tags

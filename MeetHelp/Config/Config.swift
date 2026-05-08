@@ -31,15 +31,30 @@ enum Config {
 
     // MARK: - LLM Configuration
     static let openRouterAPIURL = "https://openrouter.ai/api/v1/chat/completions"
+    static let openRouterModelsURL = "https://openrouter.ai/api/v1/models"
     static let openRouterFreeModel = "openai/gpt-oss-120b:free"
     static let defaultGeminiModel = "gemini-3.1-flash-lite-preview"
+    static let defaultOpenRouterImageModel = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+    static let defaultGeminiImageModel = "gemma-4-31b-it"
+
     static var geminiModel: String {
         let saved = UserDefaults.standard.string(forKey: "geminiModel")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return saved.isEmpty ? defaultGeminiModel : saved
     }
+
+    static var geminiImageModel: String {
+        let saved = UserDefaults.standard.string(forKey: "geminiImageModel")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return saved.isEmpty ? defaultGeminiImageModel : saved
+    }
+
     static var geminiStreamURL: String {
         "https://generativelanguage.googleapis.com/v1beta/models/\(geminiModel):streamGenerateContent"
+    }
+
+    static var geminiImageURL: String {
+        "https://generativelanguage.googleapis.com/v1beta/models/\(geminiImageModel):generateContent"
     }
 
     static var selectedLLMProvider: LLMProvider {
@@ -55,6 +70,13 @@ enum Config {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !saved.isEmpty else { return openRouterFreeModel }
         return saved.hasSuffix(":free") ? saved : openRouterFreeModel
+    }
+
+    static var openRouterImageModel: String {
+        let saved = UserDefaults.standard.string(forKey: "openRouterImageModel")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !saved.isEmpty else { return defaultOpenRouterImageModel }
+        return saved.hasSuffix(":free") ? saved : defaultOpenRouterImageModel
     }
 
     // MARK: - Audio Configuration

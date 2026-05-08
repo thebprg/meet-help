@@ -22,6 +22,7 @@
 		013 /* KeyboardShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 115; };
 		014 /* MarkdownRenderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116; };
 		015 /* MicrophoneCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 117; };
+		016 /* ScreenAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +44,7 @@
 		115 /* KeyboardShortcut.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardShortcut.swift; sourceTree = "<group>"; };
 		116 /* MarkdownRenderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderView.swift; sourceTree = "<group>"; };
 		117 /* MicrophoneCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophoneCaptureManager.swift; sourceTree = "<group>"; };
+		118 /* ScreenAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenAnalysisService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -138,6 +140,7 @@
 				117 /* MicrophoneCaptureManager.swift */,
 				111 /* DeepgramService.swift */,
 				112 /* LLMService.swift */,
+				118 /* ScreenAnalysisService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -243,6 +246,7 @@
 				013 /* KeyboardShortcut.swift in Sources */,
 				014 /* MarkdownRenderView.swift in Sources */,
 				015 /* MicrophoneCaptureManager.swift in Sources */,
+				016 /* ScreenAnalysisService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

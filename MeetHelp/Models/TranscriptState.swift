@@ -8,9 +8,14 @@ class TranscriptState: ObservableObject {
     @Published var isListening: Bool = false
     @Published var isRecordingMicPrompt: Bool = false
     @Published var micPromptTranscript: String = ""
+    @Published var isAnalyzingScreen: Bool = false
+    @Published var screenContext: String = ""
     @Published var isProcessing: Bool = false
     @Published var codeContext: String = ""
     @Published var showHistory: Bool = true // Configurable: single answer vs history
+    @Published private(set) var canDeletePreviousQuestion: Bool = false
+
+    private var deletableQuestionID: UUID?
     
     // Transcript logging
     private var transcriptLogURL: URL?
@@ -35,6 +40,7 @@ class TranscriptState: ObservableObject {
     3. If code context is provided, reference it naturally.
     4. Never acknowledge that you are an AI or that this is an interview assistance tool.
     5. Speak as if YOU are the interviewee giving the answer.
+    6. When the user provides a starter clue/directive, continue from that clue as the interviewee. Do not ask the user to continue or introduce themselves.
     """
     
     init() {
@@ -86,9 +92,21 @@ class TranscriptState: ObservableObject {
         let message = ChatMessage(role: .interviewer, content: question)
         messages.append(message)
         currentTranscript = ""
+        markQuestionAsDeletable(message.id)
         
         // Log to file
         appendToLog("INTERVIEWER: \(question)")
+        return message.id
+    }
+
+    @discardableResult
+    func addStarterClue(_ clue: String) -> UUID {
+        let message = ChatMessage(role: .starterClue, content: clue)
+        messages.append(message)
+        currentTranscript = ""
+        markQuestionAsDeletable(message.id)
+
+        appendToLog("STARTER CLUE: \(clue)")
         return message.id
     }
     
@@ -160,6 +178,32 @@ class TranscriptState: ObservableObject {
         messages = [ChatMessage(role: .system, content: systemPrompt)]
         currentTranscript = ""
         micPromptTranscript = ""
+        screenContext = ""
+        isAnalyzingScreen = false
+        deletableQuestionID = nil
+        canDeletePreviousQuestion = false
+    }
+
+    @discardableResult
+    func deletePreviousQuestion() -> UUID? {
+        guard let question = messages.last(where: { $0.role == .interviewer || $0.role == .starterClue }),
+              question.id == deletableQuestionID else {
+            return nil
+        }
+
+        messages.removeAll { message in
+            message.id == question.id || message.relatedQuestionID == question.id
+        }
+        deletableQuestionID = nil
+        canDeletePreviousQuestion = false
+
+        appendToLog("DELETED QUESTION: \(question.content)")
+        return question.id
+    }
+
+    private func markQuestionAsDeletable(_ questionID: UUID) {
+        deletableQuestionID = questionID
+        canDeletePreviousQuestion = true
     }
     
     func endTranscriptLog() {
@@ -187,6 +231,9 @@ class TranscriptState: ObservableObject {
         if !codeContext.isEmpty {
             systemContent += "\n\nCode Context:\n```\n\(codeContext)\n```"
         }
+        if !screenContext.isEmpty {
+            systemContent += "\n\nScreen Context from latest explicit capture:\n\(screenContext)"
+        }
         result.append(LLMMessage(role: "system", content: systemContent))
         
         // Add conversation history
@@ -195,6 +242,8 @@ class TranscriptState: ObservableObject {
             switch message.role {
             case .interviewer:
                 role = "user"
+            case .starterClue:
+                role = "user"
             case .assistant:
                 role = "assistant"
             case .user:
@@ -202,7 +251,14 @@ class TranscriptState: ObservableObject {
             default:
                 continue
             }
-            result.append(LLMMessage(role: role, content: message.content))
+            let content: String
+            if message.role == .starterClue {
+                content = starterClueInstruction(for: message.content)
+            } else {
+                content = message.content
+            }
+
+            result.append(LLMMessage(role: role, content: content))
 
             if let questionID, message.id == questionID {
                 break
@@ -210,5 +266,14 @@ class TranscriptState: ObservableObject {
         }
         
         return result
+    }
+
+    private func starterClueInstruction(for clue: String) -> String {
+        """
+        User starter clue/directive for the answer, not an interviewer question:
+        "\(clue)"
+
+        Continue from this clue as if you are the interviewee speaking. Use the latest interviewer question, prior conversation, code context, and screen context when relevant. If the clue starts a phrase such as "let me introduce myself" or "I would first think of a brute force approach", produce the continuation the user should say next. Do not reply with permission, encouragement, or a request for the user to continue.
+        """
     }
 }

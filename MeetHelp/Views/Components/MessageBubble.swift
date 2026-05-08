@@ -7,7 +7,7 @@ struct MessageBubble: View {
     var body: some View {
         Group {
             switch message.role {
-            case .interviewer:
+            case .interviewer, .starterClue:
                 questionView
             case .assistant, .user:
                 answerView

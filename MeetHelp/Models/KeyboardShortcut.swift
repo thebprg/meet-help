@@ -3,6 +3,9 @@ import Carbon.HIToolbox
 import Foundation
 
 struct KeyboardShortcut: Equatable {
+    static let unsetKeyCode = UInt16.max
+    static let unset = KeyboardShortcut(keyCode: unsetKeyCode, modifiers: [])
+
     let keyCode: UInt16
     let modifiers: NSEvent.ModifierFlags
 
@@ -27,7 +30,13 @@ struct KeyboardShortcut: Equatable {
         "\(keyCode):\(modifiers.rawValue)"
     }
 
+    var isUnset: Bool {
+        keyCode == Self.unsetKeyCode
+    }
+
     var displayText: String {
+        guard !isUnset else { return "Unset" }
+
         let modifierText = [
             modifiers.contains(.control) ? "⌃" : "",
             modifiers.contains(.option) ? "⌥" : "",
@@ -39,11 +48,14 @@ struct KeyboardShortcut: Equatable {
     }
 
     func matches(_ event: NSEvent) -> Bool {
-        event.keyCode == keyCode &&
-        event.modifierFlags.normalizedShortcutModifiers == modifiers
+        !isUnset &&
+            event.keyCode == keyCode &&
+            event.modifierFlags.normalizedShortcutModifiers == modifiers
     }
 
     var carbonModifiers: UInt32 {
+        guard !isUnset else { return 0 }
+
         var result: UInt32 = 0
 
         if modifiers.contains(.command) {
@@ -85,6 +97,12 @@ struct KeyboardShortcut: Equatable {
     ]
 }
 
+extension KeyboardShortcut {
+    static func disableSavedShortcut(for action: ShortcutAction) {
+        UserDefaults.standard.set(KeyboardShortcut.unset.rawValue, forKey: action.defaultsKey)
+    }
+}
+
 extension NSEvent.ModifierFlags {
     var normalizedShortcutModifiers: NSEvent.ModifierFlags {
         intersection([.command, .option, .control, .shift])
@@ -95,7 +113,10 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case toggleOverlay
     case toggleListening
     case clearSession
+    case deletePreviousQuestion
     case toggleHistory
+    case toggleSettings
+    case quitApp
     case selectModel1
     case selectModel2
     case selectModel3
@@ -120,8 +141,14 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
             return "Pause / Start Listening"
         case .clearSession:
             return "Delete Session"
+        case .deletePreviousQuestion:
+            return "Delete Previous Question"
         case .toggleHistory:
             return "Show / Hide History"
+        case .toggleSettings:
+            return "Open / Close Settings"
+        case .quitApp:
+            return "Quit App"
         case .selectModel1:
             return "Select OpenRouter Model 1"
         case .selectModel2:
@@ -147,8 +174,14 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
             return KeyboardShortcut(keyCode: 37, modifiers: [.control, .option])
         case .clearSession:
             return KeyboardShortcut(keyCode: 51, modifiers: [.control, .option])
+        case .deletePreviousQuestion:
+            return KeyboardShortcut(keyCode: 51, modifiers: [.control, .option, .shift])
         case .toggleHistory:
             return KeyboardShortcut(keyCode: 4, modifiers: [.control, .option, .shift])
+        case .toggleSettings:
+            return KeyboardShortcut(keyCode: 43, modifiers: [.control, .option])
+        case .quitApp:
+            return KeyboardShortcut(keyCode: 12, modifiers: [.control, .option])
         case .selectModel1:
             return KeyboardShortcut(keyCode: 18, modifiers: [.control, .option])
         case .selectModel2:
