@@ -15,6 +15,8 @@ final class ScreenAnalysisService: ObservableObject {
     @Published private(set) var openRouterImageInputModels: Set<String>?
 
     private let session: URLSession
+    private var providerCooldownUntil: [LLMProvider: Date] = [:]
+    private let providerCooldownDuration: TimeInterval = 60
 
     init() {
         let config = URLSessionConfiguration.default
@@ -45,20 +47,41 @@ final class ScreenAnalysisService: ObservableObject {
 
     func analyzeScreen(imageData: Data) async -> String? {
         let base64Image = imageData.base64EncodedString()
+        let selectedProvider = Config.selectedLLMProvider
+        let providers = providerAttemptSequence(primary: selectedProvider)
+        let maxAttempts = 3
 
-        switch Config.selectedLLMProvider {
-        case .openRouter:
-            if let result = await analyzeWithOpenRouter(base64Image: base64Image) {
-                return result
+        for provider in providers {
+            guard !Task.isCancelled else { return nil }
+
+            if provider != selectedProvider {
+                print("[ScreenAnalysis] Using fallback image provider: \(provider.displayName)")
+            } else {
+                print("[ScreenAnalysis] Using selected image provider: \(provider.displayName)")
             }
 
-            guard !Task.isCancelled else { return nil }
-            print("[ScreenAnalysis] OpenRouter vision failed; trying Google fallback.")
-            return await analyzeWithGemini(base64Image: base64Image)
+            for attempt in 1...maxAttempts {
+                guard !Task.isCancelled else { return nil }
 
-        case .google:
-            return await analyzeWithGemini(base64Image: base64Image)
+                print("[ScreenAnalysis] Starting \(provider.displayName) image analysis attempt \(attempt)/\(maxAttempts).")
+                if let result = await analyzeWithProvider(provider, base64Image: base64Image) {
+                    markProviderHealthy(provider)
+                    return result
+                }
+
+                print("[ScreenAnalysis] \(provider.displayName) image analysis attempt \(attempt)/\(maxAttempts) failed: \(error ?? "unknown error")")
+                if attempt < maxAttempts {
+                    print("[ScreenAnalysis] Retrying \(provider.displayName) image analysis...")
+                }
+            }
+
+            markProviderUnhealthy(provider)
+            if provider == selectedProvider {
+                print("[ScreenAnalysis] \(provider.displayName) image analysis failed after \(maxAttempts) attempts; falling back to \(provider.fallbackProvider.displayName).")
+            }
         }
+
+        return nil
     }
 
     func warmOpenRouterModelCapabilities() async {
@@ -182,6 +205,15 @@ final class ScreenAnalysisService: ObservableObject {
         }
     }
 
+    private func analyzeWithProvider(_ provider: LLMProvider, base64Image: String) async -> String? {
+        switch provider {
+        case .openRouter:
+            return await analyzeWithOpenRouter(base64Image: base64Image)
+        case .google:
+            return await analyzeWithGemini(base64Image: base64Image)
+        }
+    }
+
     @MainActor
     private func fail(_ message: String) -> String? {
         error = message
@@ -196,6 +228,35 @@ final class ScreenAnalysisService: ObservableObject {
         }
 
         return selectedModel
+    }
+
+    private func providerAttemptSequence(primary: LLMProvider) -> [LLMProvider] {
+        let fallback = primary.fallbackProvider
+        if isProviderInCooldown(primary) {
+            print("[ScreenAnalysis] Selected image provider \(primary.displayName) is cooling down; using \(fallback.displayName) first.")
+            return [fallback, primary]
+        }
+
+        return [primary, fallback]
+    }
+
+    private func isProviderInCooldown(_ provider: LLMProvider) -> Bool {
+        guard let cooldownUntil = providerCooldownUntil[provider] else { return false }
+        if Date() < cooldownUntil {
+            return true
+        }
+
+        providerCooldownUntil[provider] = nil
+        return false
+    }
+
+    private func markProviderHealthy(_ provider: LLMProvider) {
+        providerCooldownUntil[provider] = nil
+    }
+
+    private func markProviderUnhealthy(_ provider: LLMProvider) {
+        providerCooldownUntil[provider] = Date().addingTimeInterval(providerCooldownDuration)
+        print("[ScreenAnalysis] Marked \(provider.displayName) image provider unhealthy for \(Int(providerCooldownDuration)) seconds.")
     }
 
     private func openRouterModelSupportsImageInput(_ model: String) async -> Bool {

@@ -115,4 +115,13 @@ enum LLMProvider: String, CaseIterable, Identifiable {
             return "Google"
         }
     }
+
+    var fallbackProvider: LLMProvider {
+        switch self {
+        case .openRouter:
+            return .google
+        case .google:
+            return .openRouter
+        }
+    }
 }

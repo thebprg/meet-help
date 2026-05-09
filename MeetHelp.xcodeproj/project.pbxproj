@@ -23,6 +23,7 @@
 		014 /* MarkdownRenderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116; };
 		015 /* MicrophoneCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 117; };
 		016 /* ScreenAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118; };
+		017 /* AppLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,7 @@
 		116 /* MarkdownRenderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderView.swift; sourceTree = "<group>"; };
 		117 /* MicrophoneCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophoneCaptureManager.swift; sourceTree = "<group>"; };
 		118 /* ScreenAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenAnalysisService.swift; sourceTree = "<group>"; };
+		119 /* AppLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -129,6 +131,7 @@
 				108 /* ChatMessage.swift */,
 				109 /* TranscriptState.swift */,
 				115 /* KeyboardShortcut.swift */,
+				119 /* AppLogStore.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -247,6 +250,7 @@
 				014 /* MarkdownRenderView.swift in Sources */,
 				015 /* MicrophoneCaptureManager.swift in Sources */,
 				016 /* ScreenAnalysisService.swift in Sources */,
+				017 /* AppLogStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

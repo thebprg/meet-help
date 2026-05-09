@@ -9,6 +9,7 @@ extension Notification.Name {
 struct SettingsView: View {
     @ObservedObject var transcriptState: TranscriptState
     @ObservedObject var screenAnalysisService: ScreenAnalysisService
+    @ObservedObject private var appLog = AppLogStore.shared
     @AppStorage("showHistory") private var showHistory = true
     @AppStorage("llmProvider") private var llmProvider = LLMProvider.openRouter.rawValue
     @AppStorage("deepgramAPIKey") private var deepgramAPIKey = ""
@@ -34,6 +35,7 @@ struct SettingsView: View {
                 Text("API").tag(SettingsTab.api)
                 Text("General").tag(SettingsTab.general)
                 Text("Shortcuts").tag(SettingsTab.shortcuts)
+                Text("Debug").tag(SettingsTab.debug)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -47,6 +49,8 @@ struct SettingsView: View {
                 generalTab
             case .shortcuts:
                 shortcutsTab
+            case .debug:
+                debugTab
             }
         }
         .frame(width: 500, height: 680)
@@ -200,6 +204,63 @@ struct SettingsView: View {
         .scrollIndicators(.hidden)
     }
 
+    private var debugTab: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Backend Output")
+                    .font(.system(size: 16, weight: .semibold))
+
+                Spacer()
+
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(appLog.combinedText, forType: .string)
+                }
+                .disabled(appLog.entries.isEmpty)
+
+                Button("Clear") {
+                    appLog.clear()
+                }
+                .disabled(appLog.entries.isEmpty)
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 5) {
+                        if appLog.entries.isEmpty {
+                            Text("No debug output yet.")
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                        } else {
+                            ForEach(appLog.entries) { entry in
+                                Text(debugLine(for: entry))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(color(for: entry.message))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id(entry.id)
+                            }
+                        }
+                    }
+                    .padding(10)
+                }
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                )
+                .onChange(of: appLog.entries.count) { _ in
+                    guard let lastID = appLog.entries.last?.id else { return }
+                    proxy.scrollTo(lastID, anchor: .bottom)
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.bottom, 18)
+    }
+
     private var apiKeyTemplate: String {
         """
         DEEPGRAM_API_KEY=
@@ -218,6 +279,39 @@ struct SettingsView: View {
 
     private var selectedProvider: LLMProvider {
         LLMProvider(rawValue: llmProvider) ?? .openRouter
+    }
+
+    private func debugLine(for entry: AppLogEntry) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return "[\(formatter.string(from: entry.timestamp))] \(entry.message)"
+    }
+
+    private func color(for message: String) -> Color {
+        let lowercased = message.lowercased()
+        if lowercased.contains("error") ||
+            lowercased.contains("failed") ||
+            lowercased.contains("denied") ||
+            lowercased.contains("missing") {
+            return .red
+        }
+
+        if lowercased.contains("retry") ||
+            lowercased.contains("ignored") ||
+            lowercased.contains("fallback") ||
+            lowercased.contains("permission") {
+            return .orange
+        }
+
+        if lowercased.contains("started") ||
+            lowercased.contains("updated") ||
+            lowercased.contains("captured") ||
+            lowercased.contains("saved") ||
+            lowercased.contains("succeeded") {
+            return .green
+        }
+
+        return .primary
     }
 
     private func settingsGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -351,6 +445,7 @@ private enum SettingsTab {
     case api
     case general
     case shortcuts
+    case debug
 }
 
 private struct ShortcutCaptureRow: View {

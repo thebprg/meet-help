@@ -12,17 +12,14 @@ class LLMService: ObservableObject {
         self.session = URLSession(configuration: config)
     }
 
-    func generateAnswerStreaming(messages: [LLMMessage], onChunk: @escaping (String) -> Void) async -> String? {
-        switch Config.selectedLLMProvider {
+    func generateAnswerStreaming(
+        provider: LLMProvider,
+        messages: [LLMMessage],
+        onChunk: @escaping (String) -> Void
+    ) async -> String? {
+        switch provider {
         case .openRouter:
-            if let answer = await generateOpenRouterAnswerStreaming(messages: messages, onChunk: onChunk) {
-                return answer
-            }
-
-            guard !Task.isCancelled else { return nil }
-
-            print("[LLM] OpenRouter failed; trying Google fallback.")
-            return await generateGeminiAnswerStreaming(messages: messages, onChunk: onChunk)
+            return await generateOpenRouterAnswerStreaming(messages: messages, onChunk: onChunk)
         case .google:
             return await generateGeminiAnswerStreaming(messages: messages, onChunk: onChunk)
         }

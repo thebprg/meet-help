@@ -41,6 +41,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeLLMRequestID: UUID?
     private var isProcessingLLMQueue = false
     private var microphoneStopTask: Task<Void, Never>?
+    private var providerCooldownUntil: [LLMProvider: Date] = [:]
+    private let providerCooldownDuration: TimeInterval = 60
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
@@ -659,38 +661,87 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         onChunk: @escaping (String) -> Void
     ) async -> String? {
         let maxAttempts = 3
+        let selectedProvider = Config.selectedLLMProvider
+        let providers = providerAttemptSequence(primary: selectedProvider)
 
-        for attempt in 1...maxAttempts {
+        for provider in providers {
             guard request.sessionID == currentSessionID, !Task.isCancelled else { return nil }
 
-            print("[App] Starting LLM streaming attempt \(attempt)/\(maxAttempts)")
-            var attemptAnswer = ""
-            onChunk("")
+            if provider != selectedProvider {
+                print("[App] Using fallback LLM provider: \(provider.displayName)")
+            } else if isProviderInCooldown(provider) {
+                print("[App] Retrying selected provider despite cooldown because fallback also failed: \(provider.displayName)")
+            } else {
+                print("[App] Using selected LLM provider: \(provider.displayName)")
+            }
 
-            let answer = await llmService.generateAnswerStreaming(messages: messages) { chunk in
-                guard request.sessionID == self.currentSessionID, !Task.isCancelled else {
-                    return
+            for attempt in 1...maxAttempts {
+                guard request.sessionID == currentSessionID, !Task.isCancelled else { return nil }
+
+                print("[App] Starting \(provider.displayName) LLM streaming attempt \(attempt)/\(maxAttempts)")
+                var attemptAnswer = ""
+                onChunk("")
+
+                let answer = await llmService.generateAnswerStreaming(provider: provider, messages: messages) { chunk in
+                    guard request.sessionID == self.currentSessionID, !Task.isCancelled else {
+                        return
+                    }
+
+                    attemptAnswer += chunk
+                    onChunk(attemptAnswer)
                 }
 
-                attemptAnswer += chunk
-                onChunk(attemptAnswer)
+                guard request.sessionID == currentSessionID, !Task.isCancelled else { return nil }
+
+                if let answer, !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    markProviderHealthy(provider)
+                    return answer
+                }
+
+                let errorMessage = llmService.error ?? "empty response"
+                print("[App] \(provider.displayName) LLM streaming attempt \(attempt)/\(maxAttempts) failed: \(errorMessage)")
+
+                if attempt < maxAttempts {
+                    print("[App] Retrying \(provider.displayName) LLM request...")
+                }
             }
 
-            guard request.sessionID == currentSessionID, !Task.isCancelled else { return nil }
-
-            if let answer, !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return answer
-            }
-
-            let errorMessage = llmService.error ?? "empty response"
-            print("[App] LLM streaming attempt \(attempt)/\(maxAttempts) failed: \(errorMessage)")
-
-            if attempt < maxAttempts {
-                print("[App] Retrying LLM request...")
+            markProviderUnhealthy(provider)
+            if provider == selectedProvider {
+                print("[App] \(provider.displayName) failed after \(maxAttempts) attempts; falling back to \(provider.fallbackProvider.displayName).")
             }
         }
 
         return nil
+    }
+
+    private func providerAttemptSequence(primary: LLMProvider) -> [LLMProvider] {
+        let fallback = primary.fallbackProvider
+        if isProviderInCooldown(primary) {
+            print("[App] Selected provider \(primary.displayName) is cooling down; using \(fallback.displayName) first.")
+            return [fallback, primary]
+        }
+
+        return [primary, fallback]
+    }
+
+    private func isProviderInCooldown(_ provider: LLMProvider) -> Bool {
+        guard let cooldownUntil = providerCooldownUntil[provider] else { return false }
+        if Date() < cooldownUntil {
+            return true
+        }
+
+        providerCooldownUntil[provider] = nil
+        return false
+    }
+
+    private func markProviderHealthy(_ provider: LLMProvider) {
+        providerCooldownUntil[provider] = nil
+    }
+
+    private func markProviderUnhealthy(_ provider: LLMProvider) {
+        providerCooldownUntil[provider] = Date().addingTimeInterval(providerCooldownDuration)
+        print("[App] Marked \(provider.displayName) unhealthy for \(Int(providerCooldownDuration)) seconds.")
     }
 
     private func cancelPendingLLMWork() {
