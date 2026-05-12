@@ -122,6 +122,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case selectModel3
     case selectGemini
     case holdMicrophonePrompt
+    case selectModel0
+    case submitInterviewerTranscript
+    case toggleFollowUpMode
 
     var id: String { rawValue }
 
@@ -159,6 +162,12 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
             return "Select Gemini Backup"
         case .holdMicrophonePrompt:
             return "Hold Microphone Prompt"
+        case .selectModel0:
+            return "Select OpenRouter Model 0"
+        case .submitInterviewerTranscript:
+            return "Submit Interviewer Transcript"
+        case .toggleFollowUpMode:
+            return "Toggle Follow-up Mode"
         }
     }
 
@@ -192,6 +201,12 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
             return KeyboardShortcut(keyCode: 5, modifiers: [.control, .option])
         case .holdMicrophonePrompt:
             return KeyboardShortcut(keyCode: 49, modifiers: [.control, .option])
+        case .selectModel0:
+            return KeyboardShortcut(keyCode: 29, modifiers: [.control, .option])
+        case .submitInterviewerTranscript:
+            return KeyboardShortcut(keyCode: 36, modifiers: [.control, .option])
+        case .toggleFollowUpMode:
+            return KeyboardShortcut(keyCode: 3, modifiers: [.control, .option])
         }
     }
 

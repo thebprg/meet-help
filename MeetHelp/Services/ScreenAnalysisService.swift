@@ -4,15 +4,8 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-enum OpenRouterModelCapability {
-    case unknown
-    case textOnly
-    case imageInput
-}
-
 final class ScreenAnalysisService: ObservableObject {
     @Published var error: String?
-    @Published private(set) var openRouterImageInputModels: Set<String>?
 
     private let session: URLSession
     private var providerCooldownUntil: [LLMProvider: Date] = [:]
@@ -85,19 +78,12 @@ final class ScreenAnalysisService: ObservableObject {
     }
 
     func warmOpenRouterModelCapabilities() async {
-        guard openRouterImageInputModels == nil else { return }
-
-        if let models = await fetchOpenRouterImageInputModels() {
-            openRouterImageInputModels = models
-        }
+        await OpenRouterModelCatalog.shared.warm()
     }
 
+    @MainActor
     func openRouterCapability(for model: String) -> OpenRouterModelCapability {
-        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return .unknown }
-        guard let openRouterImageInputModels else { return .unknown }
-
-        return openRouterImageInputModels.contains(trimmed) ? .imageInput : .textOnly
+        OpenRouterModelCatalog.shared.capability(for: model)
     }
 
     private func analyzeWithOpenRouter(base64Image: String) async -> String? {
@@ -260,55 +246,12 @@ final class ScreenAnalysisService: ObservableObject {
     }
 
     private func openRouterModelSupportsImageInput(_ model: String) async -> Bool {
-        if let openRouterImageInputModels {
-            return openRouterImageInputModels.contains(model)
-        }
-
-        guard let models = await fetchOpenRouterImageInputModels() else {
+        guard let models = await OpenRouterModelCatalog.shared.imageCapableModelIDsLoadingIfNeeded() else {
             print("[ScreenAnalysis] Could not load OpenRouter model metadata; using configured image model.")
             return false
         }
 
-        openRouterImageInputModels = models
         return models.contains(model)
-    }
-
-    private func fetchOpenRouterImageInputModels() async -> Set<String>? {
-        guard let url = URL(string: Config.openRouterModelsURL) else {
-            print("[ScreenAnalysis] Invalid OpenRouter models URL.")
-            return nil
-        }
-
-        var request = URLRequest(url: url)
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
-        if !Config.openRouterAPIKey.isEmpty {
-            request.addValue("Bearer \(Config.openRouterAPIKey)", forHTTPHeaderField: "Authorization")
-        }
-
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                print("[ScreenAnalysis] Invalid OpenRouter models response.")
-                return nil
-            }
-
-            guard httpResponse.statusCode == 200 else {
-                print("[ScreenAnalysis] OpenRouter models request failed with status \(httpResponse.statusCode): \(responseSnippet(from: data))")
-                return nil
-            }
-
-            let decoded = try JSONDecoder().decode(OpenRouterModelsResponse.self, from: data)
-            let imageInputModels = decoded.data
-                .filter { $0.architecture.input_modalities.contains("image") }
-                .map(\.id)
-
-            print("[ScreenAnalysis] Loaded \(imageInputModels.count) OpenRouter image-capable models.")
-            return Set(imageInputModels)
-        } catch {
-            if Task.isCancelled { return nil }
-            print("[ScreenAnalysis] OpenRouter models metadata error: \(error.localizedDescription)")
-            return nil
-        }
     }
 
     private func jpegData(from cgImage: CGImage) -> Data? {
@@ -476,19 +419,6 @@ private struct OpenRouterVisionResponse: Decodable {
 
     struct Message: Decodable {
         let content: String
-    }
-}
-
-private struct OpenRouterModelsResponse: Decodable {
-    let data: [Model]
-
-    struct Model: Decodable {
-        let id: String
-        let architecture: Architecture
-    }
-
-    struct Architecture: Decodable {
-        let input_modalities: [String]
     }
 }
 

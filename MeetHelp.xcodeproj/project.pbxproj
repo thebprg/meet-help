@@ -24,6 +24,7 @@
 		015 /* MicrophoneCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 117; };
 		016 /* ScreenAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118; };
 		017 /* AppLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119; };
+		018 /* OpenRouterModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -47,6 +48,7 @@
 		117 /* MicrophoneCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophoneCaptureManager.swift; sourceTree = "<group>"; };
 		118 /* ScreenAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenAnalysisService.swift; sourceTree = "<group>"; };
 		119 /* AppLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogStore.swift; sourceTree = "<group>"; };
+		120 /* OpenRouterModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenRouterModelCatalog.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -143,6 +145,7 @@
 				117 /* MicrophoneCaptureManager.swift */,
 				111 /* DeepgramService.swift */,
 				112 /* LLMService.swift */,
+				120 /* OpenRouterModelCatalog.swift */,
 				118 /* ScreenAnalysisService.swift */,
 			);
 			path = Services;
@@ -251,6 +254,7 @@
 				015 /* MicrophoneCaptureManager.swift in Sources */,
 				016 /* ScreenAnalysisService.swift in Sources */,
 				017 /* AppLogStore.swift in Sources */,
+				018 /* OpenRouterModelCatalog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

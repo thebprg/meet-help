@@ -1,9 +1,10 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import SwiftUI
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static weak var shared: AppDelegate?
     private static let hotKeySignature = OSType(
         UInt32(UInt8(ascii: "M")) << 24 |
@@ -13,8 +14,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     private var statusItem: NSStatusItem?
+    private var mainStatusMenu: NSMenu?
+    private var appearanceStatusMenu: NSMenu?
     private var ghostWindowController: GhostWindowController?
+    private var followUpWindowController: GhostWindowController?
     private var settingsWindow: NSWindow?
+    private weak var overlayOpacitySlider: NSSlider?
 
     private let transcriptState = TranscriptState()
     private let audioManager = AudioCaptureManager()
@@ -22,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let microphoneManager = MicrophoneCaptureManager()
     private let microphoneDeepgramService = DeepgramService()
     private let llmService = LLMService()
+    private let youSearchService = YouSearchService()
     private let screenAnalysisService = ScreenAnalysisService()
 
     private var hotKeyEventHandler: EventHandlerRef?
@@ -43,6 +49,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var microphoneStopTask: Task<Void, Never>?
     private var providerCooldownUntil: [LLMProvider: Date] = [:]
     private let providerCooldownDuration: TimeInterval = 60
+    private var followUpModeCancellable: AnyCancellable?
+    private var mainWindowFrameObservers: [NSObjectProtocol] = []
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
@@ -50,6 +58,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.setActivationPolicy(.accessory)
             setupStatusItem()
             setupGhostWindow()
+            observeFollowUpMode()
             setupGlobalHotkey()
             warmOpenRouterModelCapabilities()
         }
@@ -61,6 +70,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             quitConfirmationTask?.cancel()
             unregisterGlobalHotkeys()
             removeShortcutMonitors()
+            removeMainWindowFrameObservers()
+            followUpModeCancellable?.cancel()
             transcriptState.endTranscriptLog()
             await audioManager.stopCapture()
             microphoneManager.stopCapture()
@@ -72,8 +83,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Status Item (Menu Bar)
 
     private func warmOpenRouterModelCapabilities() {
-        Task { [screenAnalysisService] in
-            await screenAnalysisService.warmOpenRouterModelCapabilities()
+        Task {
+            await OpenRouterModelCatalog.shared.warm()
         }
     }
 
@@ -82,9 +93,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "MeetHelp")
+            button.target = self
+            button.action = #selector(statusItemClicked(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             updateStatusItemAppearance()
         }
 
+        let menu = makeMainStatusMenu()
+        let appearanceMenu = makeAppearanceStatusMenu()
+        mainStatusMenu = menu
+        appearanceStatusMenu = appearanceMenu
+    }
+
+    private func makeMainStatusMenu() -> NSMenu {
         let menu = NSMenu()
 
         let toggleOverlayItem = NSMenuItem(title: "Show Overlay", action: #selector(toggleOverlay), keyEquivalent: "")
@@ -103,7 +124,89 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
+        return menu
+    }
+
+    private func makeAppearanceStatusMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.addItem(makeOverlayAppearanceMenuItem())
+        return menu
+    }
+
+    private func makeOverlayAppearanceMenuItem() -> NSMenuItem {
+        let item = NSMenuItem()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 42))
+
+        let backgroundLabel = appearanceSliderLabel("Background")
+
+        let slider = NSSlider(value: Config.overlayOpacity, minValue: 0.2, maxValue: 0.95, target: self, action: #selector(overlayOpacityChanged(_:)))
+        slider.controlSize = .small
+        slider.isContinuous = true
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        overlayOpacitySlider = slider
+
+        container.addSubview(backgroundLabel)
+        container.addSubview(slider)
+
+        NSLayoutConstraint.activate([
+            backgroundLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            backgroundLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            backgroundLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 5),
+
+            slider.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            slider.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            slider.topAnchor.constraint(equalTo: backgroundLabel.bottomAnchor, constant: 1)
+        ])
+
+        item.view = container
+        return item
+    }
+
+    private func appearanceSliderLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }
+
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else {
+            showMainStatusMenu()
+            return
+        }
+
+        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            showAppearanceStatusMenu()
+        } else {
+            showMainStatusMenu()
+        }
+    }
+
+    private func showMainStatusMenu() {
+        guard let button = statusItem?.button, let menu = mainStatusMenu else { return }
+        updateOverlayMenuItemTitle()
         statusItem?.menu = menu
+        button.performClick(nil)
+        statusItem?.menu = nil
+    }
+
+    private func showAppearanceStatusMenu() {
+        guard let button = statusItem?.button, let menu = appearanceStatusMenu else { return }
+        overlayOpacitySlider?.doubleValue = Config.overlayOpacity
+        statusItem?.menu = menu
+        button.performClick(nil)
+        statusItem?.menu = nil
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        overlayOpacitySlider?.doubleValue = Config.overlayOpacity
+    }
+
+    @objc private func overlayOpacityChanged(_ sender: NSSlider) {
+        Config.overlayOpacity = sender.doubleValue
+        NotificationCenter.default.post(name: .overlayAppearanceDidChange, object: nil)
     }
 
     private func updateStatusItemAppearance() {
@@ -116,7 +219,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateOverlayMenuItemTitle() {
-        if let menu = statusItem?.menu,
+        if let menu = mainStatusMenu,
            let toggleItem = menu.items.first {
             let isVisible = ghostWindowController?.window?.isVisible ?? false
             toggleItem.title = isVisible ? "Hide Overlay" : "Show Overlay"
@@ -144,6 +247,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             onClearHistory: { [weak self] in
                 self?.clearCurrentSession()
             },
+            onSubmitPendingInterviewerQuestion: { [weak self] in
+                self?.submitPendingInterviewerQuestion()
+            },
             onSubmitQuestion: { [weak self] question in
                 self?.submitManualQuestion(question)
             }
@@ -151,8 +257,106 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         ghostWindowController = GhostWindowController(rootView: overlayView)
         ghostWindowController?.showWindow(nil)
+        installMainWindowFrameObservers()
 
         updateOverlayMenuItemTitle()
+    }
+
+    private func observeFollowUpMode() {
+        followUpModeCancellable = transcriptState.$isFollowUpModeEnabled
+            .removeDuplicates()
+            .sink { [weak self] isEnabled in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if isEnabled {
+                        self.showFollowUpWindow()
+                    } else {
+                        self.hideFollowUpWindow()
+                    }
+                }
+            }
+    }
+
+    private func showFollowUpWindow() {
+        guard ghostWindowController?.window?.isVisible == true else { return }
+
+        if followUpWindowController == nil {
+            let followUpView = FollowUpOverlayView(
+                transcriptState: transcriptState,
+                deepgramService: deepgramService,
+                onClose: { [weak self] in
+                    self?.transcriptState.setFollowUpMode(false)
+                }
+            )
+
+            followUpWindowController = GhostWindowController(
+                rootView: followUpView,
+                contentRect: followUpWindowFrame()
+            )
+        }
+
+        positionFollowUpWindow()
+        followUpWindowController?.window?.orderFront(nil)
+    }
+
+    private func hideFollowUpWindow() {
+        followUpWindowController?.window?.orderOut(nil)
+    }
+
+    private func positionFollowUpWindow() {
+        guard let window = followUpWindowController?.window else { return }
+        window.setFrame(followUpWindowFrame(), display: true, animate: false)
+    }
+
+    private func followUpWindowFrame() -> NSRect {
+        guard let mainWindow = ghostWindowController?.window else {
+            return NSRect(x: 80, y: 80, width: 420, height: Config.defaultWindowHeight)
+        }
+
+        let mainFrame = mainWindow.frame
+        let visibleFrame = mainWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? mainFrame
+        let gap: CGFloat = 10
+        let desiredWidth = min(max(mainFrame.width * 0.72, 360), 480)
+        let rightSpace = max(0, visibleFrame.maxX - mainFrame.maxX - gap)
+        let leftSpace = max(0, mainFrame.minX - visibleFrame.minX - gap)
+        let useRight = rightSpace >= desiredWidth || rightSpace >= leftSpace
+        let availableWidth = useRight ? rightSpace : leftSpace
+        let width = max(Config.minWindowWidth, min(desiredWidth, max(availableWidth, Config.minWindowWidth)))
+        let x = useRight
+            ? min(mainFrame.maxX + gap, visibleFrame.maxX - width)
+            : max(visibleFrame.minX, mainFrame.minX - gap - width)
+        let height = min(mainFrame.height, visibleFrame.height)
+        let y = min(max(mainFrame.minY, visibleFrame.minY), visibleFrame.maxY - height)
+
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func installMainWindowFrameObservers() {
+        removeMainWindowFrameObservers()
+        guard let window = ghostWindowController?.window else { return }
+
+        let names: [Notification.Name] = [
+            NSWindow.didMoveNotification,
+            NSWindow.didResizeNotification,
+            NSWindow.didEndLiveResizeNotification
+        ]
+
+        mainWindowFrameObservers = names.map { name in
+            NotificationCenter.default.addObserver(
+                forName: name,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.positionFollowUpWindow()
+                }
+            }
+        }
+    }
+
+    private func removeMainWindowFrameObservers() {
+        mainWindowFrameObservers.forEach(NotificationCenter.default.removeObserver)
+        mainWindowFrameObservers.removeAll()
     }
 
     // MARK: - Global Hotkey
@@ -408,6 +612,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             selectGeminiProvider()
         case .holdMicrophonePrompt:
             break
+        case .selectModel0:
+            selectOpenRouterModel(index: 0)
+        case .submitInterviewerTranscript:
+            submitPendingInterviewerQuestion()
+        case .toggleFollowUpMode:
+            transcriptState.toggleFollowUpMode()
         }
     }
 
@@ -428,8 +638,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
 
-                let questionID = self.transcriptState.addInterviewerQuestion(transcript)
-                self.enqueueLLMRequest(questionID: questionID, sessionID: self.currentSessionID)
+                if Config.manualInterviewerSubmitEnabled {
+                    self.transcriptState.appendPendingInterviewerTranscript(transcript)
+                    print("[App] Buffered interviewer transcript for manual submit")
+                } else {
+                    self.submitInterviewerQuestion(transcript)
+                }
             }
         }
 
@@ -550,6 +764,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         processNextLLMRequest()
     }
 
+    private func submitInterviewerQuestion(_ question: String) {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let questionID = transcriptState.addInterviewerQuestion(trimmed)
+        enqueueLLMRequest(questionID: questionID, sessionID: currentSessionID)
+    }
+
+    private func submitPendingInterviewerQuestion() {
+        let pendingTranscript = transcriptState.pendingInterviewerTranscript
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let liveTranscript = deepgramService.finishCurrentUtterance()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let combinedTranscript = [pendingTranscript, liveTranscript]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !combinedTranscript.isEmpty else {
+            print("[App] No pending interviewer transcript to submit")
+            return
+        }
+
+        transcriptState.clearPendingInterviewerTranscript()
+        submitInterviewerQuestion(combinedTranscript)
+        print("[App] Submitted pending interviewer transcript")
+    }
+
     private func submitManualQuestion(_ question: String) {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -634,12 +876,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             guard request.sessionID == self.currentSessionID, !Task.isCancelled else { return }
 
+            let liveSearchContext = await self.liveSearchContextIfNeeded(for: request.questionID)
             let answerID = self.transcriptState.beginAssistantAnswer(for: request.questionID)
-            let messages = self.transcriptState.toLLMMessages(upTo: request.questionID)
-            print("[App] Built LLM context. Screen context characters: \(self.transcriptState.screenContext.count)")
-            let answer = await self.generateAnswerWithRetries(messages: messages, request: request) { chunk in
-                self.transcriptState.updateAssistantAnswer(id: answerID, content: chunk)
-            }
+            let messages = self.transcriptState.toLLMMessages(
+                upTo: request.questionID,
+                liveSearchContext: liveSearchContext
+            )
+            print("[App] Built LLM context. Screen context characters: \(self.transcriptState.screenContext.count), live search characters: \(liveSearchContext?.count ?? 0)")
+            let answer = await self.generateAnswerWithRetries(
+                messages: messages,
+                request: request,
+                onChunk: { chunk in
+                    self.transcriptState.updateAssistantAnswer(id: answerID, content: chunk)
+                },
+                onReasoning: { reasoning in
+                    self.transcriptState.updateAssistantReasoning(id: answerID, content: reasoning)
+                }
+            )
 
             guard request.sessionID == self.currentSessionID, !Task.isCancelled else { return }
 
@@ -655,10 +908,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func liveSearchContextIfNeeded(for questionID: UUID) async -> String? {
+        guard Config.liveSearchEnabled else { return nil }
+
+        guard !Config.youAPIKey.isEmpty else {
+            print("[LiveSearch] Skipped: YOU_API_KEY is missing.")
+            return nil
+        }
+
+        guard let query = transcriptState.content(for: questionID)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !query.isEmpty else {
+            print("[LiveSearch] Skipped: no query text found for triggering question.")
+            return nil
+        }
+
+        let rewriteMessages = transcriptState.toLLMMessages(upTo: questionID)
+        let searchQuery = await llmService.generateSearchQuery(messages: rewriteMessages, fallbackQuery: query) ?? query
+        print("[LiveSearch] Searching You.com for query: \(searchQuery)")
+        let context = await youSearchService.searchContext(for: searchQuery)
+        if let context {
+            print("[LiveSearch] Added search context (\(context.count) characters).")
+        } else {
+            print("[LiveSearch] Search failed or returned no usable context: \(youSearchService.error ?? "unknown error")")
+        }
+        return context
+    }
+
     private func generateAnswerWithRetries(
         messages: [LLMMessage],
         request: LLMRequest,
-        onChunk: @escaping (String) -> Void
+        onChunk: @escaping (String) -> Void,
+        onReasoning: @escaping (String) -> Void
     ) async -> String? {
         let maxAttempts = 3
         let selectedProvider = Config.selectedLLMProvider
@@ -681,15 +962,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 print("[App] Starting \(provider.displayName) LLM streaming attempt \(attempt)/\(maxAttempts)")
                 var attemptAnswer = ""
                 onChunk("")
+                onReasoning("")
 
-                let answer = await llmService.generateAnswerStreaming(provider: provider, messages: messages) { chunk in
-                    guard request.sessionID == self.currentSessionID, !Task.isCancelled else {
-                        return
+                let answer = await llmService.generateAnswerStreaming(
+                    provider: provider,
+                    messages: messages,
+                    onChunk: { chunk in
+                        guard request.sessionID == self.currentSessionID, !Task.isCancelled else {
+                            return
+                        }
+
+                        attemptAnswer += chunk
+                        onChunk(attemptAnswer)
+                    },
+                    onReasoning: { fullReasoning in
+                        guard request.sessionID == self.currentSessionID, !Task.isCancelled else {
+                            return
+                        }
+
+                        onReasoning(fullReasoning)
                     }
-
-                    attemptAnswer += chunk
-                    onChunk(attemptAnswer)
-                }
+                )
 
                 guard request.sessionID == currentSessionID, !Task.isCancelled else { return nil }
 
@@ -789,9 +1082,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func selectOpenRouterModel(index: Int) {
+        let normalizedIndex = min(max(index, 0), 3)
         UserDefaults.standard.set(LLMProvider.openRouter.rawValue, forKey: "llmProvider")
-        UserDefaults.standard.set(index, forKey: "selectedOpenRouterModelIndex")
-        print("[App] Selected OpenRouter model \(index)")
+        UserDefaults.standard.set(normalizedIndex, forKey: "selectedOpenRouterModelIndex")
+        print("[App] Selected OpenRouter model \(normalizedIndex)")
     }
 
     private func selectGeminiProvider() {
@@ -807,8 +1101,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let window = ghostWindowController?.window {
             if window.isVisible {
                 window.orderOut(nil)
+                hideFollowUpWindow()
             } else {
                 window.orderFront(nil)
+                if transcriptState.isFollowUpModeEnabled {
+                    showFollowUpWindow()
+                }
             }
             updateOverlayMenuItemTitle()
         }

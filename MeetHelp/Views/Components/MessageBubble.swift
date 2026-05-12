@@ -15,8 +15,6 @@ struct MessageBubble: View {
                 EmptyView()
             }
         }
-        .scaleEffect(isLatest ? 1.0 : 0.98)
-        .opacity(isLatest ? 1.0 : 0.8)
     }
     
     private var questionView: some View {
@@ -25,6 +23,8 @@ struct MessageBubble: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.white.opacity(0.92))
                 .lineSpacing(3)
+                .lineLimit(3)
+                .truncationMode(.head)
                 .textSelection(.enabled)
 
             Spacer(minLength: 0)
@@ -40,10 +40,25 @@ struct MessageBubble: View {
     }
 
     private var answerView: some View {
-        HStack(alignment: .top, spacing: 0) {
-            MarkdownRenderView(markdown: message.content)
+        HStack(alignment: .top, spacing: 8) {
+            Rectangle()
+                .fill(answerAccent)
+                .frame(width: 2)
+                .clipShape(Capsule())
 
-            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 4) {
+                if let reasoning = message.reasoningContent?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !reasoning.isEmpty {
+                    ThinkingDisclosure(reasoning: reasoning)
+                }
+
+                HStack(alignment: .top, spacing: 0) {
+                    MarkdownRenderView(markdown: message.content)
+
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.top, 1)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
@@ -54,6 +69,46 @@ struct MessageBubble: View {
             .fill(Color.black.opacity(Config.bubbleOpacity))
     }
 
+    private var answerAccent: Color {
+        Color(red: 0.24, green: 0.78, blue: 0.62).opacity(0.72)
+    }
+
+}
+
+private struct ThinkingDisclosure: View {
+    let reasoning: String
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+
+                    Text("Thinking")
+                        .font(.system(size: 10, weight: .medium))
+
+                    Spacer(minLength: 0)
+                }
+                .foregroundColor(.white.opacity(0.48))
+                .frame(height: 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                MarkdownRenderView(markdown: reasoning)
+                    .padding(.leading, 12)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 2)
+    }
 }
 
 // MARK: - Typing Indicator

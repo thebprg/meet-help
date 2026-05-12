@@ -354,13 +354,14 @@ class CornerResizeHandle: NSView {
 class GhostWindowController: NSWindowController {
     private var hostingView: NSHostingView<AnyView>?
     
-    convenience init<Content: View>(rootView: Content) {
+    convenience init<Content: View>(rootView: Content, contentRect: NSRect? = nil) {
         // Create a wrapper view (draggable by background)
+        let initialRect = contentRect ?? GhostWindowController.defaultContentRect()
         let wrapperView = GhostContentView(frame: NSRect(
             x: 0,
             y: 0,
-            width: Config.defaultWindowWidth,
-            height: Config.defaultWindowHeight
+            width: initialRect.width,
+            height: initialRect.height
         ))
         
         // Create the hosting view for SwiftUI content
@@ -419,24 +420,25 @@ class GhostWindowController: NSWindowController {
             topLeft.heightAnchor.constraint(equalToConstant: 20)
         ])
         
+        let window = GhostWindow(contentRect: initialRect, contentView: wrapperView)
+        
+        self.init(window: window)
+    }
+
+    private static func defaultContentRect() -> NSRect {
         // Calculate initial position (bottom-right corner of screen with padding)
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let windowWidth = Config.defaultWindowWidth
         let windowHeight = Config.defaultWindowHeight
         let windowX = screenFrame.maxX - windowWidth - 20
         let windowY = screenFrame.minY + 20
-        
-        let window = GhostWindow(
-            contentRect: NSRect(
-                x: windowX,
-                y: windowY,
-                width: windowWidth,
-                height: windowHeight
-            ),
-            contentView: wrapperView
+
+        return NSRect(
+            x: windowX,
+            y: windowY,
+            width: windowWidth,
+            height: windowHeight
         )
-        
-        self.init(window: window)
     }
     
     func updateContent<Content: View>(_ content: Content) {
@@ -450,6 +452,9 @@ class GhostWindowController: NSWindowController {
 // MARK: - Ghost Content View (Draggable)
 
 class GhostContentView: NSView {
+    private var appearanceObserver: NSObjectProtocol?
+    private let tintView = PassthroughView()
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupAppearance()
@@ -462,10 +467,44 @@ class GhostContentView: NSView {
     
     private func setupAppearance() {
         wantsLayer = true
-        layer?.backgroundColor = Config.overlayBackgroundColor.cgColor
+        setupBackgroundViews()
         layer?.cornerRadius = 12
         layer?.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor
         layer?.borderWidth = 1
+        layer?.masksToBounds = true
+        updateOverlayAppearance()
+
+        appearanceObserver = NotificationCenter.default.addObserver(
+            forName: .overlayAppearanceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateOverlayAppearance()
+        }
+    }
+
+    deinit {
+        if let appearanceObserver {
+            NotificationCenter.default.removeObserver(appearanceObserver)
+        }
+    }
+
+    private func setupBackgroundViews() {
+        tintView.translatesAutoresizingMaskIntoConstraints = false
+        tintView.wantsLayer = true
+
+        addSubview(tintView)
+
+        NSLayoutConstraint.activate([
+            tintView.topAnchor.constraint(equalTo: topAnchor),
+            tintView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tintView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            tintView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    private func updateOverlayAppearance() {
+        tintView.layer?.backgroundColor = Config.overlayBackgroundColor.cgColor
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -482,6 +521,12 @@ class GhostContentView: NSView {
         window?.performDrag(with: event)
     }
     
+}
+
+private final class PassthroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
 }
 
 private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {

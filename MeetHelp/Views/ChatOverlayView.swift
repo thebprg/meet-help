@@ -11,8 +11,12 @@ struct ChatOverlayView: View {
     var onCaptureScreen: (() -> Void)?
     var onDeletePreviousQuestion: (() -> Void)?
     var onClearHistory: (() -> Void)?
+    var onSubmitPendingInterviewerQuestion: (() -> Void)?
     var onSubmitQuestion: ((String) -> Void)?
 
+    @AppStorage("liveSearchEnabled") private var liveSearchEnabled = false
+    @AppStorage("youAPIKey") private var youAPIKey = ""
+    @AppStorage("manualInterviewerSubmitEnabled") private var manualInterviewerSubmitEnabled = false
     @State private var manualQuestion = ""
 
     private let horizontalMargin: CGFloat = 8
@@ -87,6 +91,63 @@ struct ChatOverlayView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Button(action: {
+                transcriptState.toggleFollowUpMode()
+            }) {
+                Image(systemName: transcriptState.isFollowUpModeEnabled ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(transcriptState.isFollowUpModeEnabled ? .yellow.opacity(0.95) : .white.opacity(0.72))
+                    .frame(width: 26, height: 26)
+                    .background(Color.white.opacity(transcriptState.isFollowUpModeEnabled ? 0.14 : 0.06))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(transcriptState.isFollowUpModeEnabled ? "Follow-up mode on" : "Follow-up mode off")
+
+            Button(action: {
+                manualInterviewerSubmitEnabled.toggle()
+            }) {
+                Text(manualInterviewerSubmitEnabled ? "Manual" : "Auto")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(manualInterviewerSubmitEnabled ? .yellow.opacity(0.95) : .white.opacity(0.74))
+                    .frame(height: 26)
+                    .padding(.horizontal, 8)
+                    .background(Color.white.opacity(manualInterviewerSubmitEnabled ? 0.14 : 0.06))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help(manualInterviewerSubmitEnabled ? "Manual interviewer submit is on" : "Auto interviewer submit is on")
+
+            if manualInterviewerSubmitEnabled {
+                Button(action: {
+                    onSubmitPendingInterviewerQuestion?()
+                }) {
+                    Image(systemName: "paperplane.circle.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(hasSubmittableInterviewerTranscript ? .white.opacity(0.9) : .white.opacity(0.32))
+                        .frame(width: 26, height: 26)
+                        .background(Color.white.opacity(hasSubmittableInterviewerTranscript ? 0.12 : 0.05))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasSubmittableInterviewerTranscript)
+                .help("Submit buffered interviewer transcript")
+            }
+
+            Button(action: {
+                liveSearchEnabled.toggle()
+            }) {
+                Image(systemName: liveSearchEnabled ? "magnifyingglass.circle.fill" : "magnifyingglass.circle")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(liveSearchEnabled ? .green : .white.opacity(0.72))
+                    .frame(width: 26, height: 26)
+                    .background(Color.white.opacity(liveSearchEnabled ? 0.14 : 0.06))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(youAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .help(liveSearchHelpText)
+
+            Button(action: {
                 onCaptureScreen?()
             }) {
                 let hasScreenContext = !transcriptState.screenContext.isEmpty
@@ -139,40 +200,81 @@ struct ChatOverlayView: View {
         .frame(height: 40)
         .background(Color(nsColor: Config.headerBackgroundColor))
     }
+
+    private var liveSearchHelpText: String {
+        if youAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Add YOU_API_KEY in Settings to use live search"
+        }
+
+        return liveSearchEnabled ? "Live search on" : "Live search off"
+    }
     
     // MARK: - History View
     
+    @ViewBuilder
     private var historyView: some View {
         ScrollViewReader { proxy in
             SlimScrollView {
-                LazyVStack(spacing: 10) {
-                    if !deepgramService.currentTranscript.isEmpty {
-                        MessageBubble(
-                            message: ChatMessage(role: .interviewer, content: deepgramService.currentTranscript),
-                            isLatest: true
-                        )
-                        .id("live-transcript")
-                    }
-
-                    ForEach(visibleTurns) { turn in
-                        VStack(alignment: .leading, spacing: 8) {
-                            MessageBubble(
-                                message: processMessage(turn.question),
-                                isLatest: turn.id == visibleTurns.first?.id
-                            )
-
-                            if let answer = turn.answer {
-                                MessageBubble(
-                                    message: processMessage(answer),
-                                    isLatest: turn.id == visibleTurns.first?.id
-                                )
-                            }
-                        }
-                        .id(turn.id)
-                    }
+                turnsStack(
+                    turns: displayedTurns,
+                    showsLiveTranscript: !transcriptState.isFollowUpModeEnabled,
+                    emptyText: "Waiting for questions..."
+                )
+            }
+            .onChange(of: transcriptState.messages.count) { _ in
+                guard !transcriptState.isFollowUpModeEnabled,
+                      let newestTurn = displayedTurns.first else {
+                    return
                 }
-                .padding(.horizontal, horizontalMargin)
-                .padding(.vertical, 8)
+
+                withAnimation(.easeOut(duration: 0.3)) {
+                    proxy.scrollTo(newestTurn.id, anchor: .top)
+                }
+            }
+        }
+    }
+
+    private var displayedTurns: [ConversationTurn] {
+        transcriptState.isFollowUpModeEnabled ? mainVisibleTurns : visibleTurns
+    }
+
+    private var followUpVisibleTurns: [ConversationTurn] {
+        visibleTurns.filter { isFollowUpTurn($0) }
+    }
+
+    private func isFollowUpTurn(_ turn: ConversationTurn) -> Bool {
+        guard transcriptState.isFollowUpModeEnabled,
+              let followUpStartedAt = transcriptState.followUpStartedAt else {
+            return false
+        }
+
+        return turn.question.timestamp > followUpStartedAt
+    }
+
+    private var mainVisibleTurns: [ConversationTurn] {
+        visibleTurns.filter { !isFollowUpTurn($0) }
+    }
+
+    private var latestVisibleAssistantMessage: ChatMessage? {
+        if transcriptState.isFollowUpModeEnabled {
+            let mainQuestionIDs = Set(mainVisibleTurns.map(\.question.id))
+            return transcriptState.messages.last {
+                $0.role == .assistant &&
+                    $0.relatedQuestionID.map { mainQuestionIDs.contains($0) } == true
+            }
+        }
+
+        return transcriptState.messages.last { $0.role == .assistant }
+    }
+
+    private var normalHistoryView: some View {
+        ScrollViewReader { proxy in
+            SlimScrollView {
+                turnsStack(
+                    turns: visibleTurns,
+                    showsLiveTranscript: true,
+                    emptyText: "Waiting for questions..."
+                )
             }
             .onChange(of: transcriptState.messages.count) { _ in
                 if let newestTurn = visibleTurns.first {
@@ -181,20 +283,69 @@ struct ChatOverlayView: View {
                     }
                 }
             }
-            .onChange(of: visibleTurns.first?.answer?.content) { _ in
-                if let newestTurn = visibleTurns.first {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(newestTurn.id, anchor: .top)
-                    }
-                }
+        }
+    }
+
+    private func turnsStack(
+        turns: [ConversationTurn],
+        showsLiveTranscript: Bool,
+        emptyText: String
+    ) -> some View {
+        LazyVStack(spacing: 10) {
+            if showsLiveTranscript, !displayedInterviewerTranscript.isEmpty {
+                MessageBubble(
+                    message: ChatMessage(role: .interviewer, content: displayedInterviewerTranscript),
+                    isLatest: true
+                )
+                .id("live-transcript")
             }
-            .onChange(of: deepgramService.currentTranscript) { _ in
-                guard !deepgramService.currentTranscript.isEmpty else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("live-transcript", anchor: .top)
-                }
+
+            if turns.isEmpty && !(showsLiveTranscript && !displayedInterviewerTranscript.isEmpty) {
+                Text(emptyText)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.38))
+                    .frame(maxWidth: .infinity, minHeight: 52)
+            }
+
+            ForEach(turns) { turn in
+                turnView(turn: turn, isLatest: turn.id == turns.first?.id)
+                    .id(turn.id)
             }
         }
+        .padding(.horizontal, horizontalMargin)
+        .padding(.vertical, 8)
+    }
+
+    private func turnView(turn: ConversationTurn, isLatest: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            MessageBubble(
+                message: processMessage(turn.question),
+                isLatest: isLatest
+            )
+
+            if let answer = turn.answer {
+                answerDivider
+
+                MessageBubble(
+                    message: processMessage(answer),
+                    isLatest: isLatest
+                )
+            }
+        }
+    }
+
+    private var answerDivider: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(Color(red: 0.24, green: 0.78, blue: 0.62).opacity(0.45))
+                .frame(width: 18, height: 1)
+
+            Rectangle()
+                .fill(Color(red: 0.24, green: 0.78, blue: 0.62).opacity(0.10))
+                .frame(height: 1)
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 1)
     }
     
     // MARK: - Single Answer View (NOW SCROLLABLE)
@@ -202,16 +353,16 @@ struct ChatOverlayView: View {
     private var singleAnswerView: some View {
         SlimScrollView {
             VStack {
-                if !deepgramService.currentTranscript.isEmpty {
+                if !transcriptState.isFollowUpModeEnabled, !displayedInterviewerTranscript.isEmpty {
                     MessageBubble(
-                        message: ChatMessage(role: .interviewer, content: deepgramService.currentTranscript),
+                        message: ChatMessage(role: .interviewer, content: displayedInterviewerTranscript),
                         isLatest: true
                     )
                         .padding(.horizontal, horizontalMargin)
                         .padding(.top, 8)
                 }
 
-                if let lastAnswer = lastAssistantMessage {
+                if let lastAnswer = latestVisibleAssistantMessage {
                     MessageBubble(message: processMessage(lastAnswer), isLatest: true)
                         .padding(.horizontal, horizontalMargin)
                         .padding(.vertical, 8)
@@ -345,13 +496,29 @@ struct ChatOverlayView: View {
             )
         }
     }
-    
-    private var lastAssistantMessage: ChatMessage? {
-        transcriptState.messages.last { $0.role == .assistant }
-    }
 
     private var canDeletePreviousQuestion: Bool {
         transcriptState.canDeletePreviousQuestion
+    }
+
+    private var hasSubmittableInterviewerTranscript: Bool {
+        !displayedInterviewerTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var displayedInterviewerTranscript: String {
+        let liveTranscript = deepgramService.currentTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard manualInterviewerSubmitEnabled else { return liveTranscript }
+
+        let pendingTranscript = transcriptState.pendingInterviewerTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if pendingTranscript.isEmpty {
+            return liveTranscript
+        }
+
+        if liveTranscript.isEmpty {
+            return pendingTranscript
+        }
+
+        return pendingTranscript + " " + liveTranscript
     }
     
     /// Process message content to strip <think> tags
@@ -362,7 +529,8 @@ struct ChatOverlayView: View {
             role: message.role,
             content: cleanedContent,
             timestamp: message.timestamp,
-            relatedQuestionID: message.relatedQuestionID
+            relatedQuestionID: message.relatedQuestionID,
+            reasoningContent: message.reasoningContent
         )
     }
     
@@ -383,6 +551,176 @@ struct ChatOverlayView: View {
             result = String(result[..<openTagRange.lowerBound])
         }
         
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct FollowUpOverlayView: View {
+    @ObservedObject var transcriptState: TranscriptState
+    @ObservedObject var deepgramService: DeepgramService
+    var onClose: (() -> Void)?
+
+    @AppStorage("manualInterviewerSubmitEnabled") private var manualInterviewerSubmitEnabled = false
+
+    private let horizontalMargin: CGFloat = 8
+
+    var body: some View {
+        VStack(spacing: 0) {
+            headerView
+
+            Rectangle()
+                .fill(Color.white.opacity(0.15))
+                .frame(height: 1)
+
+            SlimScrollView {
+                turnsStack
+            }
+        }
+        .background(Color.clear)
+    }
+
+    private var headerView: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "rectangle.split.2x1.fill")
+                    .font(.system(size: 11, weight: .semibold))
+
+                Text("Follow-up")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundColor(.yellow.opacity(0.88))
+
+            WindowDragRegion()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Button(action: {
+                onClose?()
+            }) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.62))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .help("Close follow-up mode")
+        }
+        .padding(.horizontal, horizontalMargin)
+        .padding(.vertical, 8)
+        .frame(height: 40)
+        .background(Color(nsColor: Config.headerBackgroundColor))
+    }
+
+    private var turnsStack: some View {
+        LazyVStack(spacing: 10) {
+            if !displayedInterviewerTranscript.isEmpty {
+                MessageBubble(
+                    message: ChatMessage(role: .interviewer, content: displayedInterviewerTranscript),
+                    isLatest: true
+                )
+            }
+
+            if followUpVisibleTurns.isEmpty && displayedInterviewerTranscript.isEmpty {
+                Text("Follow-up questions will appear here")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.38))
+                    .frame(maxWidth: .infinity, minHeight: 72)
+            }
+
+            ForEach(followUpVisibleTurns) { turn in
+                VStack(alignment: .leading, spacing: 7) {
+                    MessageBubble(
+                        message: processMessage(turn.question),
+                        isLatest: turn.id == followUpVisibleTurns.first?.id
+                    )
+
+                    if let answer = turn.answer {
+                        answerDivider
+
+                        MessageBubble(
+                            message: processMessage(answer),
+                            isLatest: turn.id == followUpVisibleTurns.first?.id
+                        )
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, horizontalMargin)
+        .padding(.vertical, 8)
+    }
+
+    private var answerDivider: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(Color(red: 0.24, green: 0.78, blue: 0.62).opacity(0.45))
+                .frame(width: 18, height: 1)
+
+            Rectangle()
+                .fill(Color(red: 0.24, green: 0.78, blue: 0.62).opacity(0.10))
+                .frame(height: 1)
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 1)
+    }
+
+    private var followUpVisibleTurns: [ConversationTurn] {
+        guard let followUpStartedAt = transcriptState.followUpStartedAt else { return [] }
+        return visibleTurns.filter { $0.question.timestamp > followUpStartedAt }
+    }
+
+    private var visibleTurns: [ConversationTurn] {
+        let questions = transcriptState.messages.filter { $0.role == .interviewer || $0.role == .starterClue }
+        let answers = transcriptState.messages.filter { $0.role == .assistant }
+
+        return questions.reversed().map { question in
+            ConversationTurn(
+                id: question.id,
+                question: question,
+                answer: answers.first { $0.relatedQuestionID == question.id }
+            )
+        }
+    }
+
+    private var displayedInterviewerTranscript: String {
+        let liveTranscript = deepgramService.currentTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard manualInterviewerSubmitEnabled else { return liveTranscript }
+
+        let pendingTranscript = transcriptState.pendingInterviewerTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if pendingTranscript.isEmpty {
+            return liveTranscript
+        }
+
+        if liveTranscript.isEmpty {
+            return pendingTranscript
+        }
+
+        return pendingTranscript + " " + liveTranscript
+    }
+
+    private func processMessage(_ message: ChatMessage) -> ChatMessage {
+        let cleanedContent = stripThinkTags(from: message.content)
+        return ChatMessage(
+            id: message.id,
+            role: message.role,
+            content: cleanedContent,
+            timestamp: message.timestamp,
+            relatedQuestionID: message.relatedQuestionID,
+            reasoningContent: message.reasoningContent
+        )
+    }
+
+    private func stripThinkTags(from content: String) -> String {
+        var result = content
+
+        let completePattern = "<think>[\\s\\S]*?</think>"
+        if let regex = try? NSRegularExpression(pattern: completePattern, options: [.caseInsensitive]) {
+            let range = NSRange(result.startIndex..., in: result)
+            result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
+        }
+
+        if let openTagRange = result.range(of: "<think>", options: .caseInsensitive) {
+            result = String(result[..<openTagRange.lowerBound])
+        }
+
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
