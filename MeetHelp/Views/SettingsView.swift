@@ -27,6 +27,7 @@ struct SettingsView: View {
     @AppStorage("openRouterImageModel") private var openRouterImageModel = Config.defaultOpenRouterImageModel
     @AppStorage("geminiImageModel") private var geminiImageModel = Config.defaultGeminiImageModel
     @AppStorage("manualInterviewerSubmitEnabled") private var manualInterviewerSubmitEnabled = false
+    @AppStorage("openRouterFreeModeEnabled") private var openRouterFreeModeEnabled = true
     @Environment(\.dismiss) private var dismiss
 
     @State private var apiKeyPasteText = ""
@@ -34,6 +35,8 @@ struct SettingsView: View {
     @State private var saveMessage = ""
     @State private var shortcutRefreshID = UUID()
     @State private var openRouterOptionDrafts: [String: OpenRouterRequestOptions] = [:]
+    @State private var openRouterProviderDrafts: [String: String] = [:]
+    @State private var expandedProviderSelectors: Set<String> = []
     @State private var selectedOpenRouterModelPanel = 1
     
     var body: some View {
@@ -124,6 +127,10 @@ struct SettingsView: View {
                 switch selectedProvider {
                 case .openRouter:
                     VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Free model mode", isOn: $openRouterFreeModeEnabled)
+                            .font(.system(size: 13, weight: .medium))
+                            .help("When enabled, MeetHelp only uses free OpenRouter models and free provider endpoints.")
+
                         Picker("Model", selection: $selectedOpenRouterModelPanel) {
                             Text("0").tag(0)
                             Text("1").tag(1)
@@ -362,6 +369,8 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
 
+                openRouterProviderPicker(model: model, optionsKey: optionsKey)
+
                 Divider()
 
                 Text("Options")
@@ -375,7 +384,7 @@ struct SettingsView: View {
                     openRouterOptionsEditor(
                         model: model,
                         options: openRouterOptionsBinding(forKey: optionsKey),
-                        supportedParameters: openRouterSupportedParameters(for: model)
+                        supportedParameters: openRouterSupportedParameters(for: model, optionsKey: optionsKey)
                     )
                     .onAppear {
                         loadOpenRouterOptionsDraftIfNeeded(forKey: optionsKey)
@@ -429,6 +438,367 @@ struct SettingsView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func openRouterProviderPicker(model: String, optionsKey: String) -> some View {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            EmptyView()
+        } else {
+            let endpoints = openRouterCatalog.endpoints(for: trimmed)
+            let visibleEndpoints = providerEndpointsForDisplay(endpoints ?? [])
+            let providerBinding = openRouterProviderBinding(forKey: optionsKey)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Provider")
+                        .font(.system(size: 15, weight: .semibold))
+
+                    Spacer()
+
+                    Text(providerCountText(visibleEndpoints.count))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Button {
+                        Task {
+                            await openRouterCatalog.endpointsLoadingIfNeeded(for: trimmed, force: true)
+                        }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                    .help("Refresh providers")
+                }
+
+                if endpoints == nil {
+                    Text("Loading providers...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .task(id: trimmed) {
+                            _ = await openRouterCatalog.endpointsLoadingIfNeeded(for: trimmed)
+                        }
+                } else if visibleEndpoints.isEmpty {
+                    Text(openRouterFreeModeEnabled ? "No free providers reported for this model." : "No providers reported for this model.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    providerSelectionDisclosure(
+                        endpoints: visibleEndpoints,
+                        optionsKey: optionsKey,
+                        selectedTag: providerBinding.wrappedValue,
+                        onSelect: { providerBinding.wrappedValue = $0 }
+                    )
+                }
+            }
+            .onAppear {
+                loadOpenRouterProviderDraftIfNeeded(forKey: optionsKey)
+            }
+        }
+    }
+
+    private func providerEndpointsForDisplay(_ endpoints: [OpenRouterProviderEndpoint]) -> [OpenRouterProviderEndpoint] {
+        let filtered = openRouterFreeModeEnabled ? endpoints.filter(\.isFree) : endpoints
+        return filtered.sorted { lhs, rhs in
+            let lhsStatus = lhs.status ?? Int.max
+            let rhsStatus = rhs.status ?? Int.max
+            if lhsStatus != rhsStatus { return lhsStatus < rhsStatus }
+
+            let lhsCost = (lhs.promptPrice ?? 0) + (lhs.completionPrice ?? 0)
+            let rhsCost = (rhs.promptPrice ?? 0) + (rhs.completionPrice ?? 0)
+            if lhsCost != rhsCost { return lhsCost < rhsCost }
+
+            let lhsLatency = lhs.latencyP50 ?? .greatestFiniteMagnitude
+            let rhsLatency = rhs.latencyP50 ?? .greatestFiniteMagnitude
+            if lhsLatency != rhsLatency { return lhsLatency < rhsLatency }
+
+            return (lhs.throughputP50 ?? 0) > (rhs.throughputP50 ?? 0)
+        }
+    }
+
+    private func providerCountText(_ count: Int) -> String {
+        count == 1 ? "1 provider" : "\(count) providers"
+    }
+
+    private func providerSelectionDisclosure(
+        endpoints: [OpenRouterProviderEndpoint],
+        optionsKey: String,
+        selectedTag: String,
+        onSelect: @escaping (String) -> Void
+    ) -> some View {
+        let expanded = providerSelectorExpandedBinding(forKey: optionsKey)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Button {
+                expanded.wrappedValue.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    providerSelectionLabel(endpoints: endpoints, selectedTag: selectedTag)
+
+                    Image(systemName: expanded.wrappedValue ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded.wrappedValue {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        providerAutoChoiceRow(isSelected: selectedTag.isEmpty) {
+                            onSelect("")
+                        }
+
+                        ForEach(endpoints) { endpoint in
+                            providerChoiceRow(
+                                endpoint: endpoint,
+                                isSelected: selectedTag == endpoint.tag
+                            ) {
+                                onSelect(endpoint.tag)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+                .frame(maxHeight: 280)
+                .scrollIndicators(.hidden)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+        )
+        .accentColor(.secondary)
+    }
+
+    private func providerSelectorExpandedBinding(forKey key: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedProviderSelectors.contains(key) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedProviderSelectors.insert(key)
+                } else {
+                    expandedProviderSelectors.remove(key)
+                }
+            }
+        )
+    }
+
+    private func providerSelectionLabel(endpoints: [OpenRouterProviderEndpoint], selectedTag: String) -> some View {
+        let selectedEndpoint = selectedTag.isEmpty
+            ? endpoints.first
+            : endpoints.first(where: { $0.tag == selectedTag })
+
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: selectedTag.isEmpty ? "sparkles" : "server.rack")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.secondary)
+                .frame(width: 16)
+                .padding(.top, 3)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(providerSelectionTitle(endpoints: endpoints, selectedTag: selectedTag))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+
+                if let selectedEndpoint {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 68), spacing: 5)], spacing: 5) {
+                        providerMetricChip("In", priceText(selectedEndpoint.promptPrice))
+                        providerMetricChip("Out", priceText(selectedEndpoint.completionPrice))
+                        providerMetricChip("Cache", priceText(selectedEndpoint.cacheReadPrice))
+                        providerMetricChip("Lat", wholeMetricText(selectedEndpoint.latencyP50, suffix: " ms"))
+                        providerMetricChip("Speed", wholeMetricText(selectedEndpoint.throughputP50, suffix: "/s"))
+                        providerMetricChip("Up", wholeMetricText(selectedEndpoint.uptimeLast30m, suffix: "%"))
+                    }
+                } else {
+                    Text(providerSelectionSubtitle(endpoints: endpoints, selectedTag: selectedTag))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func providerSelectionTitle(endpoints: [OpenRouterProviderEndpoint], selectedTag: String) -> String {
+        guard !selectedTag.isEmpty else { return "Auto best provider" }
+        guard let endpoint = endpoints.first(where: { $0.tag == selectedTag }) else {
+            return "Selected provider unavailable"
+        }
+        return providerDisplayName(endpoint)
+    }
+
+    private func providerSelectionSubtitle(endpoints: [OpenRouterProviderEndpoint], selectedTag: String) -> String {
+        if selectedTag.isEmpty {
+            guard let endpoint = endpoints.first else { return "No provider selected" }
+            return providerCompactMetrics(endpoint)
+        }
+
+        guard let endpoint = endpoints.first(where: { $0.tag == selectedTag }) else {
+            return "Provider no longer available"
+        }
+
+        return providerCompactMetrics(endpoint)
+    }
+
+    private func providerDisplayName(_ endpoint: OpenRouterProviderEndpoint) -> String {
+        var pieces = [endpoint.providerName]
+        if let quantization = endpoint.quantization?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !quantization.isEmpty {
+            pieces.append(quantization)
+        }
+        return pieces.joined(separator: " / ")
+    }
+
+    private func providerAutoChoiceRow(isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 12))
+                    .foregroundColor(isSelected ? .accentColor : .secondary)
+                    .frame(width: 16)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Auto best")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+
+                    Text("Best route from the current provider list.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(isSelected ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func providerChoiceRow(
+        endpoint: OpenRouterProviderEndpoint,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 12))
+                    .foregroundColor(isSelected ? .accentColor : .secondary)
+                    .frame(width: 16)
+                    .padding(.top, 4)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(providerDisplayName(endpoint))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+
+                        Text(endpoint.tag)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+
+                        Spacer(minLength: 0)
+
+                        providerStatusPill(endpoint.isFree ? "Free" : "Paid", color: endpoint.isFree ? .green : .orange)
+                    }
+
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 68), spacing: 5)], spacing: 5) {
+                        providerMetricChip("In", priceText(endpoint.promptPrice))
+                        providerMetricChip("Out", priceText(endpoint.completionPrice))
+                        providerMetricChip("Cache", priceText(endpoint.cacheReadPrice))
+                        providerMetricChip("Lat", wholeMetricText(endpoint.latencyP50, suffix: " ms"))
+                        providerMetricChip("Speed", wholeMetricText(endpoint.throughputP50, suffix: "/s"))
+                        providerMetricChip("Up", wholeMetricText(endpoint.uptimeLast30m, suffix: "%"))
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(isSelected ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func providerMetricChip(_ title: String, _ value: String) -> some View {
+        HStack(spacing: 3) {
+            Text(title)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+
+            Text(value)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    private func providerStatusPill(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundColor(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.12))
+            .clipShape(Capsule())
+    }
+
+    private func providerCompactMetrics(_ endpoint: OpenRouterProviderEndpoint) -> String {
+        [
+            endpoint.isFree ? "Free" : "Paid",
+            "in \(priceText(endpoint.promptPrice))",
+            "out \(priceText(endpoint.completionPrice))",
+            "cache \(priceText(endpoint.cacheReadPrice))",
+            "lat \(wholeMetricText(endpoint.latencyP50, suffix: " ms"))",
+            "speed \(wholeMetricText(endpoint.throughputP50, suffix: "/s"))",
+            "up \(wholeMetricText(endpoint.uptimeLast30m, suffix: "%"))"
+        ].joined(separator: " · ")
+    }
+
+    private func priceText(_ value: Double?) -> String {
+        guard let value else { return "-" }
+        if value == 0 { return "$0" }
+        let perMillion = value * 1_000_000
+        if perMillion >= 0.01 {
+            return "$" + String(format: "%.2f/M", perMillion)
+        }
+        return "$" + String(format: "%.6f", value)
+    }
+
+    private func metricText(_ value: Double?, suffix: String) -> String {
+        guard let value else { return "-" }
+        return String(format: "%.2f", value) + suffix
+    }
+
+    private func wholeMetricText(_ value: Double?, suffix: String) -> String {
+        guard let value else { return "-" }
+        return String(format: "%.0f", value) + suffix
     }
 
     private func debugLine(for entry: AppLogEntry) -> String {
@@ -519,6 +889,20 @@ struct SettingsView: View {
         return openRouterCatalog.supportedParameters(for: trimmed)
     }
 
+    private func openRouterSupportedParameters(for model: String, optionsKey: String) -> Set<String>? {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let selectedTag = Config.openRouterProviderTag(forSlot: optionsKey)
+        if !selectedTag.isEmpty,
+           let endpoints = openRouterCatalog.endpoints(for: trimmed),
+           let endpoint = providerEndpointsForDisplay(endpoints).first(where: { $0.tag == selectedTag }) {
+            return endpoint.supportedParameters
+        }
+
+        return openRouterCatalog.supportedParameters(for: trimmed)
+    }
+
     private func openRouterModelEditor(title: String, text: Binding<String>, optionsKey: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             modelField(title: title, text: text, capability: openRouterCapability(for: text.wrappedValue))
@@ -530,7 +914,7 @@ struct SettingsView: View {
                         openRouterOptionsEditor(
                             model: trimmed,
                             options: openRouterOptionsBinding(forKey: optionsKey),
-                            supportedParameters: openRouterSupportedParameters(for: trimmed)
+                            supportedParameters: openRouterSupportedParameters(for: trimmed, optionsKey: optionsKey)
                         )
                     }
                     .padding(.top, 8)
@@ -731,6 +1115,18 @@ struct SettingsView: View {
         )
     }
 
+    private func openRouterProviderBinding(forKey key: String) -> Binding<String> {
+        Binding(
+            get: {
+                openRouterProviderDrafts[key] ?? Config.openRouterProviderTag(forSlot: key)
+            },
+            set: { newProviderTag in
+                openRouterProviderDrafts[key] = newProviderTag
+                Config.setOpenRouterProviderTag(newProviderTag, forSlot: key)
+            }
+        )
+    }
+
     private func optionBinding<Value>(
         _ options: Binding<OpenRouterRequestOptions>,
         _ keyPath: WritableKeyPath<OpenRouterRequestOptions, Value>
@@ -760,6 +1156,11 @@ struct SettingsView: View {
     private func loadOpenRouterOptionsDraftIfNeeded(forKey key: String) {
         guard !key.isEmpty, openRouterOptionDrafts[key] == nil else { return }
         openRouterOptionDrafts[key] = Config.openRouterOptions(forSlot: key)
+    }
+
+    private func loadOpenRouterProviderDraftIfNeeded(forKey key: String) {
+        guard !key.isEmpty, openRouterProviderDrafts[key] == nil else { return }
+        openRouterProviderDrafts[key] = Config.openRouterProviderTag(forSlot: key)
     }
 
     private var integerFormatter: NumberFormatter {

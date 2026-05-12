@@ -45,13 +45,15 @@ struct ChatCompletionRequest: Codable {
     let frequency_penalty: Double?
     let presence_penalty: Double?
     let reasoning: OpenRouterReasoningRequest?
+    let provider: OpenRouterProviderRouting?
     
     init(
         messages: [LLMMessage],
         stream: Bool = false,
         model: String = Config.selectedOpenRouterModel,
         options: OpenRouterRequestOptions = Config.openRouterOptions(for: Config.selectedOpenRouterModel),
-        supportedParameters: Set<String>? = nil
+        supportedParameters: Set<String>? = nil,
+        providerRouting: OpenRouterProviderRouting? = nil
     ) {
         let normalizedOptions = options.normalized
 
@@ -71,12 +73,20 @@ struct ChatCompletionRequest: Codable {
         } else {
             self.reasoning = nil
         }
+
+        self.provider = providerRouting
     }
 
     private static func supports(_ parameter: String, supportedParameters: Set<String>?, fallback: Bool) -> Bool {
         guard let supportedParameters else { return fallback }
         return supportedParameters.contains(parameter)
     }
+}
+
+struct OpenRouterProviderRouting: Codable {
+    let order: [String]?
+    let allow_fallbacks: Bool
+    let sort: String?
 }
 
 struct OpenRouterReasoningRequest: Codable {

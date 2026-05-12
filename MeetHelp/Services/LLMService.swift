@@ -66,12 +66,14 @@ class LLMService: ObservableObject {
         ]
 
         let supportedParameters = await OpenRouterModelCatalog.shared.supportedParametersLoadingIfNeeded(for: model)
+        let providerRouting = await openRouterProviderRouting(model: model, slot: "search")
         let requestBody = ChatCompletionRequest(
             messages: rewriteMessages,
             stream: false,
             model: model,
             options: Config.openRouterSearchOptions,
-            supportedParameters: supportedParameters
+            supportedParameters: supportedParameters,
+            providerRouting: providerRouting
         )
 
         var request = URLRequest(url: url)
@@ -133,12 +135,15 @@ class LLMService: ObservableObject {
 
         let model = Config.selectedOpenRouterModel
         let supportedParameters = await OpenRouterModelCatalog.shared.supportedParametersLoadingIfNeeded(for: model)
+        let slot = Config.selectedOpenRouterModelIndex == 0 ? "search" : "model\(Config.selectedOpenRouterModelIndex)"
+        let providerRouting = await openRouterProviderRouting(model: model, slot: slot)
         let requestBody = ChatCompletionRequest(
             messages: messages,
             stream: true,
             model: model,
             options: Config.selectedOpenRouterOptions,
-            supportedParameters: supportedParameters
+            supportedParameters: supportedParameters,
+            providerRouting: providerRouting
         )
 
         do {
@@ -204,6 +209,62 @@ class LLMService: ObservableObject {
 
             return await fail("OpenRouter streaming error: \(error.localizedDescription)")
         }
+    }
+
+    private func openRouterProviderRouting(model: String, slot: String) async -> OpenRouterProviderRouting? {
+        guard let endpoints = await OpenRouterModelCatalog.shared.endpointsLoadingIfNeeded(for: model),
+              !endpoints.isEmpty else {
+            return nil
+        }
+
+        let allowedEndpoints = Config.openRouterFreeModeEnabled ? endpoints.filter(\.isFree) : endpoints
+        guard !allowedEndpoints.isEmpty else {
+            return nil
+        }
+
+        let selectedTag = Config.openRouterProviderTag(forSlot: slot)
+        let sortedTags = allowedEndpoints
+            .sorted(by: Self.isBetterOpenRouterEndpoint)
+            .map(\.tag)
+
+        let order: [String]
+        if !selectedTag.isEmpty, sortedTags.contains(selectedTag) {
+            order = [selectedTag] + sortedTags.filter { $0 != selectedTag }
+        } else {
+            order = sortedTags
+        }
+
+        return OpenRouterProviderRouting(
+            order: order,
+            allow_fallbacks: true,
+            sort: order.isEmpty ? "price" : nil
+        )
+    }
+
+    private static func isBetterOpenRouterEndpoint(_ lhs: OpenRouterProviderEndpoint, _ rhs: OpenRouterProviderEndpoint) -> Bool {
+        if Config.openRouterFreeModeEnabled, lhs.isFree != rhs.isFree {
+            return lhs.isFree
+        }
+
+        let lhsStatus = lhs.status ?? Int.max
+        let rhsStatus = rhs.status ?? Int.max
+        if lhsStatus != rhsStatus {
+            return lhsStatus < rhsStatus
+        }
+
+        let lhsCost = (lhs.promptPrice ?? 0) + (lhs.completionPrice ?? 0)
+        let rhsCost = (rhs.promptPrice ?? 0) + (rhs.completionPrice ?? 0)
+        if lhsCost != rhsCost {
+            return lhsCost < rhsCost
+        }
+
+        let lhsLatency = lhs.latencyP50 ?? .greatestFiniteMagnitude
+        let rhsLatency = rhs.latencyP50 ?? .greatestFiniteMagnitude
+        if lhsLatency != rhsLatency {
+            return lhsLatency < rhsLatency
+        }
+
+        return (lhs.throughputP50 ?? 0) > (rhs.throughputP50 ?? 0)
     }
 
     private static func mergedReasoning(existing: String, incoming: String) -> String {

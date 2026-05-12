@@ -23,6 +23,10 @@ enum Config {
         UserDefaults.standard.bool(forKey: "liveSearchEnabled")
     }
 
+    static var openRouterFreeModeEnabled: Bool {
+        UserDefaults.standard.object(forKey: "openRouterFreeModeEnabled") as? Bool ?? true
+    }
+
     static var manualInterviewerSubmitEnabled: Bool {
         UserDefaults.standard.bool(forKey: "manualInterviewerSubmitEnabled")
     }
@@ -83,7 +87,7 @@ enum Config {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let fallback = index == 0 ? defaultOpenRouterSearchModel : openRouterFreeModel
         guard !saved.isEmpty else { return fallback }
-        return isFreeOpenRouterModel(saved) ? saved : fallback
+        return openRouterFreeModeEnabled && !isFreeOpenRouterModel(saved) ? fallback : saved
     }
 
     static var selectedOpenRouterModelIndex: Int {
@@ -95,14 +99,14 @@ enum Config {
         let saved = UserDefaults.standard.string(forKey: "openRouterSearchModel")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !saved.isEmpty else { return defaultOpenRouterSearchModel }
-        return isFreeOpenRouterModel(saved) ? saved : defaultOpenRouterSearchModel
+        return openRouterFreeModeEnabled && !isFreeOpenRouterModel(saved) ? defaultOpenRouterSearchModel : saved
     }
 
     static var openRouterImageModel: String {
         let saved = UserDefaults.standard.string(forKey: "openRouterImageModel")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !saved.isEmpty else { return defaultOpenRouterImageModel }
-        return isFreeOpenRouterModel(saved) ? saved : defaultOpenRouterImageModel
+        return openRouterFreeModeEnabled && !isFreeOpenRouterModel(saved) ? defaultOpenRouterImageModel : saved
     }
 
     static func isFreeOpenRouterModel(_ model: String) -> Bool {
@@ -148,6 +152,45 @@ enum Config {
             UserDefaults.standard.set(data, forKey: "openRouterOptionsBySlot")
         } catch {
             print("[Config] Failed to save OpenRouter slot options: \(error.localizedDescription)")
+        }
+    }
+
+    static func openRouterProviderTag(forSlot slot: String) -> String {
+        let trimmed = slot.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return openRouterProviderTagsBySlot()[trimmed] ?? ""
+    }
+
+    static func setOpenRouterProviderTag(_ providerTag: String, forSlot slot: String) {
+        let trimmed = slot.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        var tagsBySlot = openRouterProviderTagsBySlot()
+        let tag = providerTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        if tag.isEmpty {
+            tagsBySlot.removeValue(forKey: trimmed)
+        } else {
+            tagsBySlot[trimmed] = tag
+        }
+
+        do {
+            let data = try JSONEncoder().encode(tagsBySlot)
+            UserDefaults.standard.set(data, forKey: "openRouterProviderTagsBySlot")
+        } catch {
+            print("[Config] Failed to save OpenRouter provider selection: \(error.localizedDescription)")
+        }
+    }
+
+    private static func openRouterProviderTagsBySlot() -> [String: String] {
+        guard let data = UserDefaults.standard.data(forKey: "openRouterProviderTagsBySlot") else {
+            return [:]
+        }
+
+        do {
+            return try JSONDecoder().decode([String: String].self, from: data)
+        } catch {
+            print("[Config] Failed to decode OpenRouter provider selections: \(error.localizedDescription)")
+            return [:]
         }
     }
 
