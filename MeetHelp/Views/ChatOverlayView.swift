@@ -18,6 +18,7 @@ struct ChatOverlayView: View {
     @AppStorage("youAPIKey") private var youAPIKey = ""
     @AppStorage("manualInterviewerSubmitEnabled") private var manualInterviewerSubmitEnabled = false
     @State private var manualQuestion = ""
+    @State private var secondaryToolbarExpanded = false
 
     private let horizontalMargin: CGFloat = 8
 
@@ -64,141 +65,159 @@ struct ChatOverlayView: View {
     // MARK: - Header
     
     private var headerView: some View {
-        HStack(spacing: 10) {
-            // Clickable status indicator (toggles listening)
-            Button(action: {
-                onToggleListening?()
-            }) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(transcriptState.isListening ? Color.green : Color.red.opacity(0.8))
-                        .frame(width: 10, height: 10)
-                        .shadow(color: transcriptState.isListening ? .green.opacity(0.6) : .clear, radius: 4)
-                    
-                    Text(transcriptState.isListening ? "In-use" : "Paused")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.9))
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.white.opacity(0.08))
-                .cornerRadius(6)
+        VStack(spacing: 0) {
+            primaryToolbar
+
+            if secondaryToolbarExpanded {
+                Rectangle()
+                    .fill(Color.white.opacity(0.1))
+                    .frame(height: 1)
+
+                secondaryToolbar
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
-            .buttonStyle(.plain)
-            .help("Click to toggle listening (⌘⇧L)")
+        }
+        .background(Color(nsColor: Config.headerBackgroundColor))
+        .animation(.easeOut(duration: 0.16), value: secondaryToolbarExpanded)
+    }
+
+    private var primaryToolbar: some View {
+        HStack(spacing: 10) {
+            headerIconButton(
+                systemName: transcriptState.isListening ? "pause.fill" : "play.fill",
+                isActive: transcriptState.isListening,
+                activeColor: .green,
+                help: transcriptState.isListening ? "Pause listening" : "Start listening"
+            ) {
+                onToggleListening?()
+            }
 
             WindowDragRegion()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Button(action: {
+            headerIconButton(
+                systemName: transcriptState.isFollowUpModeEnabled ? "rectangle.split.2x1.fill" : "rectangle.split.2x1",
+                isActive: transcriptState.isFollowUpModeEnabled,
+                activeColor: .yellow.opacity(0.95),
+                help: transcriptState.isFollowUpModeEnabled ? "Follow-up mode on" : "Follow-up mode off"
+            ) {
                 transcriptState.toggleFollowUpMode()
-            }) {
-                Image(systemName: transcriptState.isFollowUpModeEnabled ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(transcriptState.isFollowUpModeEnabled ? .yellow.opacity(0.95) : .white.opacity(0.72))
-                    .frame(width: 26, height: 26)
-                    .background(Color.white.opacity(transcriptState.isFollowUpModeEnabled ? 0.14 : 0.06))
-                    .clipShape(Circle())
             }
-            .buttonStyle(.plain)
-            .help(transcriptState.isFollowUpModeEnabled ? "Follow-up mode on" : "Follow-up mode off")
 
+            if manualInterviewerSubmitEnabled {
+                headerIconButton(
+                    systemName: "paperplane.circle.fill",
+                    isActive: hasSubmittableInterviewerTranscript,
+                    isEnabled: hasSubmittableInterviewerTranscript,
+                    activeColor: .white.opacity(0.9),
+                    help: "Submit buffered interviewer transcript"
+                ) {
+                    onSubmitPendingInterviewerQuestion?()
+                }
+            }
+
+            headerIconButton(
+                systemName: liveSearchEnabled ? "magnifyingglass.circle.fill" : "magnifyingglass.circle",
+                isActive: liveSearchEnabled,
+                isEnabled: !youAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                activeColor: .green,
+                help: liveSearchHelpText
+            ) {
+                liveSearchEnabled.toggle()
+            }
+
+            headerIconButton(
+                systemName: transcriptState.isAnalyzingScreen ? "camera.viewfinder" : "viewfinder",
+                isActive: transcriptState.isAnalyzingScreen || !transcriptState.screenContext.isEmpty,
+                isEnabled: !transcriptState.isAnalyzingScreen,
+                activeColor: .green,
+                help: screenCaptureHelpText
+            ) {
+                onCaptureScreen?()
+            }
+
+            headerIconButton(
+                systemName: secondaryToolbarExpanded ? "chevron.up.circle.fill" : "chevron.down.circle",
+                isActive: secondaryToolbarExpanded,
+                help: secondaryToolbarExpanded ? "Hide more controls" : "Show more controls"
+            ) {
+                secondaryToolbarExpanded.toggle()
+            }
+        }
+        .padding(.horizontal, horizontalMargin)
+        .frame(height: 40)
+    }
+
+    private var secondaryToolbar: some View {
+        HStack(spacing: 8) {
             Button(action: {
                 manualInterviewerSubmitEnabled.toggle()
             }) {
                 Text(manualInterviewerSubmitEnabled ? "Manual" : "Auto")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(manualInterviewerSubmitEnabled ? .yellow.opacity(0.95) : .white.opacity(0.74))
-                    .frame(height: 26)
-                    .padding(.horizontal, 8)
+                    .foregroundColor(manualInterviewerSubmitEnabled ? .yellow.opacity(0.95) : .white.opacity(0.76))
+                    .frame(width: 66, height: 24)
                     .background(Color.white.opacity(manualInterviewerSubmitEnabled ? 0.14 : 0.06))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
             .help(manualInterviewerSubmitEnabled ? "Manual interviewer submit is on" : "Auto interviewer submit is on")
 
-            if manualInterviewerSubmitEnabled {
-                Button(action: {
-                    onSubmitPendingInterviewerQuestion?()
-                }) {
-                    Image(systemName: "paperplane.circle.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(hasSubmittableInterviewerTranscript ? .white.opacity(0.9) : .white.opacity(0.32))
-                        .frame(width: 26, height: 26)
-                        .background(Color.white.opacity(hasSubmittableInterviewerTranscript ? 0.12 : 0.05))
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!hasSubmittableInterviewerTranscript)
-                .help("Submit buffered interviewer transcript")
-            }
-
-            Button(action: {
-                liveSearchEnabled.toggle()
-            }) {
-                Image(systemName: liveSearchEnabled ? "magnifyingglass.circle.fill" : "magnifyingglass.circle")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(liveSearchEnabled ? .green : .white.opacity(0.72))
-                    .frame(width: 26, height: 26)
-                    .background(Color.white.opacity(liveSearchEnabled ? 0.14 : 0.06))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(youAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .help(liveSearchHelpText)
-
-            Button(action: {
-                onCaptureScreen?()
-            }) {
-                let hasScreenContext = !transcriptState.screenContext.isEmpty
-                Image(systemName: transcriptState.isAnalyzingScreen ? "camera.viewfinder" : "viewfinder")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor((transcriptState.isAnalyzingScreen || hasScreenContext) ? .green : .white.opacity(0.82))
-                    .frame(width: 26, height: 26)
-                    .background(Color.white.opacity((transcriptState.isAnalyzingScreen || hasScreenContext) ? 0.14 : 0.08))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(transcriptState.isAnalyzingScreen)
-            .help(screenCaptureHelpText)
-            
-            // Toggle history mode
-            Button(action: {
+            headerIconButton(
+                systemName: transcriptState.showHistory ? "rectangle.stack.fill" : "rectangle.fill",
+                isActive: transcriptState.showHistory,
+                help: transcriptState.showHistory ? "Show single answer" : "Show history"
+            ) {
                 transcriptState.showHistory.toggle()
-            }) {
-                Image(systemName: transcriptState.showHistory ? "rectangle.stack.fill" : "rectangle.fill")
-                    .font(.system(size: 13))
-                    .foregroundColor(.white.opacity(0.7))
             }
-            .buttonStyle(.plain)
-            .help(transcriptState.showHistory ? "Show single answer" : "Show history")
 
-            Button(action: {
+            headerIconButton(
+                systemName: "minus.circle",
+                isActive: false,
+                isEnabled: canDeletePreviousQuestion,
+                help: "Delete previous question"
+            ) {
                 onDeletePreviousQuestion?()
-            }) {
-                Image(systemName: "minus.circle")
-                    .font(.system(size: 13))
-                    .foregroundColor(canDeletePreviousQuestion ? .white.opacity(0.7) : .white.opacity(0.3))
             }
-            .buttonStyle(.plain)
-            .disabled(!canDeletePreviousQuestion)
-            .help("Delete previous question")
-            
-            // Clear history
-            Button(action: {
+
+            headerIconButton(
+                systemName: "trash",
+                isActive: false,
+                activeColor: .red.opacity(0.9),
+                help: "Clear history"
+            ) {
                 onClearHistory?()
-            }) {
-                Image(systemName: "trash")
-                    .font(.system(size: 13))
-                    .foregroundColor(.white.opacity(0.7))
             }
-            .buttonStyle(.plain)
-            .help("Clear history")
+
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, horizontalMargin)
-        .padding(.vertical, 8)
-        .frame(height: 40)
-        .background(Color(nsColor: Config.headerBackgroundColor))
+        .frame(height: 34)
+    }
+
+    private func headerIconButton(
+        systemName: String,
+        isActive: Bool,
+        isEnabled: Bool = true,
+        activeColor: Color = .white.opacity(0.9),
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(
+                    !isEnabled
+                        ? .white.opacity(0.3)
+                        : (isActive ? activeColor : .white.opacity(0.72))
+                )
+                .frame(width: 26, height: 26)
+                .background(Color.white.opacity(isActive ? 0.14 : 0.06))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .help(help)
     }
 
     private var liveSearchHelpText: String {
@@ -756,6 +775,7 @@ private struct WindowDragRegion: NSViewRepresentable {
 
         override func mouseDown(with event: NSEvent) {
             window?.makeKey()
+            (window as? GhostWindow)?.notifyUserFrameInteraction()
             window?.performDrag(with: event)
         }
     }

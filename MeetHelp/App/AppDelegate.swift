@@ -51,6 +51,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let providerCooldownDuration: TimeInterval = 60
     private var followUpModeCancellable: AnyCancellable?
     private var mainWindowFrameObservers: [NSObjectProtocol] = []
+    private var followUpWindowObservers: [NSObjectProtocol] = []
+    private var isFollowUpDetached = false
+    private var isPositioningFollowUpWindow = false
+    private var isHandlingMainWindowFrameChange = false
+    private var attachedFollowUpRepositionWorkItem: DispatchWorkItem?
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
@@ -71,6 +76,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             unregisterGlobalHotkeys()
             removeShortcutMonitors()
             removeMainWindowFrameObservers()
+            removeFollowUpWindowObservers()
+            attachedFollowUpRepositionWorkItem?.cancel()
             followUpModeCancellable?.cancel()
             transcriptState.endTranscriptLog()
             await audioManager.stopCapture()
@@ -293,9 +300,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 rootView: followUpView,
                 contentRect: followUpWindowFrame()
             )
+            configureFollowUpUserDetachHandler()
+            installFollowUpWindowObservers()
         }
 
-        positionFollowUpWindow()
+        if isFollowUpDetached {
+            detachFollowUpWindow()
+            constrainDetachedFollowUpWindow()
+        } else {
+            positionFollowUpWindow()
+            attachFollowUpWindowIfNeeded()
+        }
         followUpWindowController?.window?.orderFront(nil)
     }
 
@@ -304,8 +319,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func positionFollowUpWindow() {
+        guard !isFollowUpDetached,
+              let window = followUpWindowController?.window else { return }
+        setFollowUpFrame(followUpWindowFrame(), for: window)
+        attachFollowUpWindowIfNeeded()
+    }
+
+    private func constrainDetachedFollowUpWindow() {
         guard let window = followUpWindowController?.window else { return }
-        window.setFrame(followUpWindowFrame(), display: true, animate: false)
+        setFollowUpFrame(window.frame, for: window)
+    }
+
+    private func setFollowUpFrame(_ frame: NSRect, for window: NSWindow) {
+        isPositioningFollowUpWindow = true
+        let constrained = window.constrainFrameRect(frame, to: bestScreen(for: frame))
+        window.setFrame(constrained, display: true, animate: false)
+        DispatchQueue.main.async { [weak self] in
+            self?.isPositioningFollowUpWindow = false
+        }
+    }
+
+    private func attachFollowUpWindowIfNeeded() {
+        guard !isFollowUpDetached,
+              let mainWindow = ghostWindowController?.window,
+              let followUpWindow = followUpWindowController?.window else { return }
+
+        if mainWindow.childWindows?.contains(followUpWindow) != true {
+            mainWindow.addChildWindow(followUpWindow, ordered: .above)
+        }
+    }
+
+    private func detachFollowUpWindow() {
+        guard let mainWindow = ghostWindowController?.window,
+              let followUpWindow = followUpWindowController?.window,
+              mainWindow.childWindows?.contains(followUpWindow) == true else { return }
+
+        mainWindow.removeChildWindow(followUpWindow)
+    }
+
+    private func markFollowUpDetached() {
+        guard !isFollowUpDetached else { return }
+        isFollowUpDetached = true
+        detachFollowUpWindow()
+        print("[App] Follow-up window detached")
     }
 
     private func followUpWindowFrame() -> NSRect {
@@ -331,6 +387,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return NSRect(x: x, y: y, width: width, height: height)
     }
 
+    private func bestScreen(for frame: NSRect) -> NSScreen? {
+        let frameCenter = NSPoint(x: frame.midX, y: frame.midY)
+        if let containingScreen = NSScreen.screens.first(where: { $0.visibleFrame.contains(frameCenter) }) {
+            return containingScreen
+        }
+
+        return NSScreen.screens.max { lhs, rhs in
+            lhs.visibleFrame.intersection(frame).area < rhs.visibleFrame.intersection(frame).area
+        } ?? NSScreen.main
+    }
+
     private func installMainWindowFrameObservers() {
         removeMainWindowFrameObservers()
         guard let window = ghostWindowController?.window else { return }
@@ -348,7 +415,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.positionFollowUpWindow()
+                    guard let self else { return }
+                    self.scheduleAttachedFollowUpReposition()
                 }
             }
         }
@@ -357,6 +425,73 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func removeMainWindowFrameObservers() {
         mainWindowFrameObservers.forEach(NotificationCenter.default.removeObserver)
         mainWindowFrameObservers.removeAll()
+    }
+
+    private func installFollowUpWindowObservers() {
+        removeFollowUpWindowObservers()
+        guard let window = followUpWindowController?.window else { return }
+
+        let names: [Notification.Name] = [
+            NSWindow.didResizeNotification,
+            NSWindow.didEndLiveResizeNotification
+        ]
+
+        followUpWindowObservers = names.map { name in
+            NotificationCenter.default.addObserver(
+                forName: name,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.isFollowUpDetached,
+                          !self.isPositioningFollowUpWindow,
+                          !self.isHandlingMainWindowFrameChange else { return }
+                    self.constrainDetachedFollowUpWindow()
+                }
+            }
+        }
+    }
+
+    private func configureFollowUpUserDetachHandler() {
+        guard let window = followUpWindowController?.window as? GhostWindow else { return }
+        window.onUserFrameInteraction = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.markFollowUpDetached()
+            }
+        }
+    }
+
+    private func removeFollowUpWindowObservers() {
+        followUpWindowObservers.forEach(NotificationCenter.default.removeObserver)
+        followUpWindowObservers.removeAll()
+    }
+
+    private func constrainMainWindow() {
+        guard let window = ghostWindowController?.window else { return }
+        let constrained = window.constrainFrameRect(window.frame, to: bestScreen(for: window.frame))
+        guard constrained != window.frame else { return }
+        window.setFrame(constrained, display: true, animate: false)
+    }
+
+    private func scheduleAttachedFollowUpReposition() {
+        guard !isFollowUpDetached else { return }
+
+        attachedFollowUpRepositionWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !self.isFollowUpDetached else { return }
+                self.isHandlingMainWindowFrameChange = true
+                self.constrainMainWindow()
+                self.positionFollowUpWindow()
+                DispatchQueue.main.async { [weak self] in
+                    self?.isHandlingMainWindowFrameChange = false
+                }
+            }
+        }
+
+        attachedFollowUpRepositionWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
     }
 
     // MARK: - Global Hotkey

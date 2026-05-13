@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 class GhostWindow: NSWindow {
+    var onUserFrameInteraction: (() -> Void)?
     
     init(contentRect: NSRect, contentView: NSView) {
         super.init(
@@ -56,6 +57,35 @@ class GhostWindow: NSWindow {
         makeKey()
         super.mouseDown(with: event)
     }
+
+    func notifyUserFrameInteraction() {
+        onUserFrameInteraction?()
+    }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        let targetScreen = screen ?? bestScreen(for: frameRect)
+        guard let visibleFrame = targetScreen?.visibleFrame else {
+            return super.constrainFrameRect(frameRect, to: screen)
+        }
+
+        var constrained = frameRect
+        constrained.size.width = min(max(constrained.width, minSize.width), visibleFrame.width)
+        constrained.size.height = min(max(constrained.height, minSize.height), visibleFrame.height)
+        constrained.origin.x = min(max(constrained.minX, visibleFrame.minX), visibleFrame.maxX - constrained.width)
+        constrained.origin.y = min(max(constrained.minY, visibleFrame.minY), visibleFrame.maxY - constrained.height)
+        return constrained
+    }
+
+    private func bestScreen(for frame: NSRect) -> NSScreen? {
+        let frameCenter = NSPoint(x: frame.midX, y: frame.midY)
+        if let containingScreen = NSScreen.screens.first(where: { $0.visibleFrame.contains(frameCenter) }) {
+            return containingScreen
+        }
+
+        return NSScreen.screens.max { lhs, rhs in
+            lhs.visibleFrame.intersection(frame).area < rhs.visibleFrame.intersection(frame).area
+        } ?? NSScreen.main
+    }
 }
 
 // MARK: - Drag Handle View
@@ -83,6 +113,7 @@ class DragHandleView: NSView {
     
     override func mouseDown(with event: NSEvent) {
         window?.makeKey()
+        (window as? GhostWindow)?.notifyUserFrameInteraction()
         window?.performDrag(with: event)
     }
     
@@ -194,6 +225,7 @@ class CornerResizeHandle: NSView {
     
     override func mouseDown(with event: NSEvent) {
         guard activeRect.contains(convert(event.locationInWindow, from: nil)) else { return }
+        (window as? GhostWindow)?.notifyUserFrameInteraction()
         initialMouseLocation = NSEvent.mouseLocation
         initialWindowFrame = window?.frame
     }
@@ -238,7 +270,7 @@ class CornerResizeHandle: NSView {
             newFrame.size.height = max(initialFrame.height + deltaY, Config.minWindowHeight)
         }
         
-        window.setFrame(newFrame, display: true)
+        window.setFrame(window.constrainFrameRect(newFrame, to: nil), display: true)
     }
     
     override func mouseUp(with event: NSEvent) {
@@ -518,6 +550,7 @@ class GhostContentView: NSView {
     // Enable window dragging by background
     override func mouseDown(with event: NSEvent) {
         window?.makeKey()
+        (window as? GhostWindow)?.notifyUserFrameInteraction()
         window?.performDrag(with: event)
     }
     
@@ -537,5 +570,12 @@ private final class FirstMouseHostingView<Content: View>: NSHostingView<Content>
     override func mouseDown(with event: NSEvent) {
         window?.makeKey()
         super.mouseDown(with: event)
+    }
+}
+
+private extension NSRect {
+    var area: CGFloat {
+        guard !isNull, !isEmpty else { return 0 }
+        return width * height
     }
 }
