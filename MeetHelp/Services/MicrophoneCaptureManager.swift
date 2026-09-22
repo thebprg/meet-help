@@ -328,9 +328,16 @@ final class MicrophoneCaptureManager: ObservableObject {
             return nil
         }
 
-        guard let channelData = outputBuffer.int16ChannelData else { return nil }
-        let frameLength = Int(outputBuffer.frameLength)
-        return Data(bytes: channelData[0], count: frameLength * MemoryLayout<Int16>.size)
+        guard outputBuffer.frameLength > 0 else { return nil }
+
+        let audioBufferList = outputBuffer.audioBufferList.pointee
+        let audioBuffer = audioBufferList.mBuffers
+        guard let dataPointer = audioBuffer.mData,
+              audioBuffer.mDataByteSize > 0 else {
+            return nil
+        }
+
+        return Data(bytes: dataPointer, count: Int(audioBuffer.mDataByteSize))
     }
 }
 

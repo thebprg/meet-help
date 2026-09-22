@@ -5,6 +5,7 @@ class LLMService: ObservableObject {
     @Published var error: String?
 
     private let session: URLSession
+    private var preferredOpenRouterProviderBySlot: [String: String] = [:]
 
     init() {
         let config = URLSessionConfiguration.default
@@ -230,7 +231,13 @@ class LLMService: ObservableObject {
         let order: [String]
         if !selectedTag.isEmpty, sortedTags.contains(selectedTag) {
             order = [selectedTag] + sortedTags.filter { $0 != selectedTag }
+        } else if let preferredTag = preferredOpenRouterProviderBySlot[slot],
+                  sortedTags.contains(preferredTag) {
+            order = [preferredTag] + sortedTags.filter { $0 != preferredTag }
         } else {
+            if let firstTag = sortedTags.first {
+                preferredOpenRouterProviderBySlot[slot] = firstTag
+            }
             order = sortedTags
         }
 

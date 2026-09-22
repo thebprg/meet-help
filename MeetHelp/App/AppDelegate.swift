@@ -47,6 +47,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var activeLLMRequestID: UUID?
     private var isProcessingLLMQueue = false
     private var microphoneStopTask: Task<Void, Never>?
+    private var microphonePromptSegments: [String] = []
     private var providerCooldownUntil: [LLMProvider: Date] = [:]
     private let providerCooldownDuration: TimeInterval = 60
     private var followUpModeCancellable: AnyCancellable?
@@ -832,17 +833,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         microphoneStopTask?.cancel()
         microphoneStopTask = nil
+        microphonePromptSegments.removeAll()
         transcriptState.micPromptTranscript = ""
 
         microphoneDeepgramService.connect(
             onTranscriptUpdate: { [weak self] transcript in
                 Task { @MainActor [weak self] in
-                    self?.transcriptState.micPromptTranscript = transcript
+                    self?.displayMicrophonePrompt(liveTranscript: transcript)
                 }
             },
             onUtteranceEnd: { [weak self] transcript in
                 Task { @MainActor [weak self] in
-                    self?.transcriptState.micPromptTranscript = transcript
+                    guard let self else { return }
+                    self.appendMicrophonePromptSegment(transcript)
+                    self.displayMicrophonePrompt()
                 }
             }
         )
@@ -879,9 +883,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
             let transcript = self.microphoneDeepgramService.finishCurrentUtterance()
             self.microphoneDeepgramService.disconnect()
+            self.appendMicrophonePromptSegment(transcript)
 
-            let prompt = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prompt = self.microphonePromptText()
             self.transcriptState.micPromptTranscript = prompt
+            self.microphonePromptSegments.removeAll()
 
             guard !prompt.isEmpty else {
                 print("[App] Microphone prompt was empty")
@@ -892,6 +898,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.transcriptState.micPromptTranscript = ""
             print("[App] Submitted microphone prompt")
         }
+    }
+
+    private func appendMicrophonePromptSegment(_ segment: String) {
+        let trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if microphonePromptSegments.last == trimmed { return }
+        microphonePromptSegments.append(trimmed)
+    }
+
+    private func microphonePromptText(liveTranscript: String = "") -> String {
+        let live = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        var parts = microphonePromptSegments
+        if !live.isEmpty, parts.last != live {
+            parts.append(live)
+        }
+        return parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func displayMicrophonePrompt(liveTranscript: String = "") {
+        transcriptState.micPromptTranscript = microphonePromptText(liveTranscript: liveTranscript)
     }
 
     private func enqueueLLMRequest(questionID: UUID, sessionID: UUID) {

@@ -17,8 +17,11 @@ struct ChatOverlayView: View {
     @AppStorage("liveSearchEnabled") private var liveSearchEnabled = false
     @AppStorage("youAPIKey") private var youAPIKey = ""
     @AppStorage("manualInterviewerSubmitEnabled") private var manualInterviewerSubmitEnabled = false
+    @AppStorage("notebookMarkdown") private var notebookMarkdown = ""
     @State private var manualQuestion = ""
     @State private var secondaryToolbarExpanded = false
+    @State private var isNotebookMode = false
+    @State private var isNotebookPreviewing = false
 
     private let horizontalMargin: CGFloat = 8
 
@@ -44,20 +47,21 @@ struct ChatOverlayView: View {
                 .fill(Color.white.opacity(0.15))
                 .frame(height: 1)
             
-            // Main content area - BOTH modes are now scrollable
-            if transcriptState.showHistory {
-                // Scrollable history mode
+            if isNotebookMode {
+                notebookView
+            } else if transcriptState.showHistory {
                 historyView
             } else {
-                // Single answer mode - NOW SCROLLABLE
                 singleAnswerView
             }
-            
-            Rectangle()
-                .fill(Color.white.opacity(0.1))
-                .frame(height: 1)
 
-            composerView
+            if !isNotebookMode {
+                Rectangle()
+                    .fill(Color.white.opacity(0.1))
+                    .frame(height: 1)
+
+                composerView
+            }
         }
         .background(Color.clear)
     }
@@ -150,6 +154,17 @@ struct ChatOverlayView: View {
 
     private var secondaryToolbar: some View {
         HStack(spacing: 8) {
+            Spacer(minLength: 0)
+
+            headerIconButton(
+                systemName: isNotebookMode ? "note.text.badge.plus" : "note.text",
+                isActive: isNotebookMode,
+                activeColor: .cyan.opacity(0.95),
+                help: isNotebookMode ? "Return to conversation" : "Open notebook mode"
+            ) {
+                isNotebookMode.toggle()
+            }
+
             Button(action: {
                 manualInterviewerSubmitEnabled.toggle()
             }) {
@@ -188,8 +203,6 @@ struct ChatOverlayView: View {
             ) {
                 onClearHistory?()
             }
-
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, horizontalMargin)
         .frame(height: 34)
@@ -409,6 +422,97 @@ struct ChatOverlayView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Notebook View
+
+    private var notebookView: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "note.text")
+                    .font(.system(size: 12, weight: .semibold))
+
+                Text("Notebook")
+                    .font(.system(size: 12, weight: .semibold))
+
+                Spacer(minLength: 0)
+
+                Button {
+                    isNotebookPreviewing.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: isNotebookPreviewing ? "pencil" : "eye")
+                            .font(.system(size: 10, weight: .semibold))
+
+                        Text(isNotebookPreviewing ? "Edit" : "Preview")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundColor(.white.opacity(0.72))
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(isNotebookPreviewing ? "Edit Markdown" : "Preview Markdown")
+            }
+            .foregroundColor(.white.opacity(0.78))
+            .padding(.horizontal, horizontalMargin + 2)
+            .padding(.vertical, 7)
+
+            SlimScrollView {
+                Group {
+                    if isNotebookPreviewing {
+                        notebookPreviewSurface
+                    } else {
+                        notebookEditorSurface
+                    }
+                }
+                .padding(.horizontal, horizontalMargin)
+                .padding(.bottom, 10)
+            }
+        }
+    }
+
+    private var notebookEditorSurface: some View {
+        TextEditor(text: $notebookMarkdown)
+            .font(.system(size: 13, design: .monospaced))
+            .foregroundColor(.white.opacity(0.94))
+            .scrollContentBackground(.hidden)
+            .padding(8)
+            .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
+            .background(notebookSurfaceBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(notebookSurfaceBorder)
+    }
+
+    private var notebookPreviewSurface: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if notebookMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("Write Markdown, then preview it here.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.36))
+                    .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
+            } else {
+                MarkdownRenderView(markdown: notebookMarkdown)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
+        .background(notebookSurfaceBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(notebookSurfaceBorder)
+    }
+
+    private var notebookSurfaceBackground: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color.black.opacity(Config.bubbleOpacity * 0.55))
+    }
+
+    private var notebookSurfaceBorder: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .stroke(Color.white.opacity(0.08), lineWidth: 1)
     }
     
     // MARK: - Processing View
